@@ -1,0 +1,146 @@
+--- flicklib.py	2026-01-24 10:28:27.196208659 -0500
++++ flicklib_update.py	2026-01-24 10:25:38.317387925 -0500
+@@ -76,8 +76,12 @@
+     i2cm.transaction(i2c.writing_bytes(SW_ADDR, *data))
+ 
+ def i2c_read(len):
+-    data = i2cm.transaction(i2c.reading(SW_ADDR, len))
+-    return data[0]
++    try: 
++       data = i2cm.transaction(i2c.reading(SW_ADDR, len))
++       return data[0]
++    except Exception as e:
++       print(e)
++       return [0]
+ 
+ def millis():
+     return int(round(time.time() * 1000))
+@@ -88,6 +92,14 @@
+     GPIO.output(SW_RESET_PIN, GPIO.HIGH)
+     time.sleep(0.04) # Datasheet delay of 200ms plus change
+ 
++def recalibrate():
++           _stop_poll()
++           #force recalibrate [ Header                ][ Parameter ID ][ Reserved  ][   Argument 0         ][    Argument 1          ]      
++           i2c_write( [0x10, 0x00, 0x00, 0xa2,   0x00, 0x10,   0x00, 0x00,  0x00, 0x00, 0x00, 0x00,   0x00, 0x00, 0x00, 0x00])
++           time.sleep(0.02)
++           _start_poll()         
++
++
+ class StoppableThread(threading.Thread):
+     '''Basic stoppable thread wrapper
+ 
+@@ -155,25 +167,47 @@
+         if callable(_on_move):
+             _on_move(x, y, z)
+ 
+-    if d_configmask & SW_DATA_GESTURE and not d_gesture[0] == 0:
+-        # We have a gesture!
+-        is_edge = (d_gesture[3] & 0b00000001) > 0
++    if d_configmask & SW_DATA_GESTURE and not d_gesture[0] == 0: 
++    
++        # We have a gesture packed in 4 bytes
++        
++        #is_edge =     (d_gesture[2] & 0b00000001) > 0 # bit 16 check  Edge bit
++        #is_hold =     (d_gesture[3] & 0b00010000) > 0 # bit 28 check  Hand Hold bit
++        #is_present =  (d_gesture[3] & 0b00001000) > 0 # bit 27 check  Presence bit  
++        
+         gestures = [
+-            ('garbage','',''),
+-            ('flick','west','east'),
+-            ('flick','east','west'),
+-            ('flick','south','north'),
+-            ('flick','north','south'),
+-            ('circle','clockwise',''),
+-            ('circle','counter-clockwise','')
++            (0,'none','',''),
++            (1,'garbage','',''),
++            (2,'flick','west','east'),
++            (3,'flick','east','west'),
++            (4,'flick','south','north'),
++            (5,'flick','north','south'),
++            (6,'circle','clockwise',''),
++            (7,'circle','counter-clockwise',''),
++            (8,'wave','X',''),
++            (9,'wave','Y'''),
++            (64,'hold','',''),
++            (73,'presence','',''),
++            (65,'edge','west','east'),
++            (66,'edge','east','west'),
++            (67,'edge','south','north'),
++            (68,'edge','north','south'),
++            (69,'double','west','east'),
++            (70,'double','east','west'),
++            (71,'double','south','north'),
++            (72,'double','north','south')
+         ]
+-        for i,gesture in enumerate(gestures):
+-            if d_gesture[0] == i + 1:
+ 
+-                if gesture[0] == 'flick' and callable(_on_flick):
+-                    _on_flick(gesture[1], gesture[2])
++        for gesture in gestures:
++            if d_gesture[0] == gesture[0]:
++
++                if callable(_on_flick):
++                    _on_flick(gesture[1],gesture[2], gesture[3])
+ 
+                 break
++        
++
++              
+ 
+     if d_configmask & SW_DATA_TOUCH and not (d_touch[0] == 0 and d_touch[1] == 0):
+         # We have a touch
+@@ -296,16 +330,12 @@
+             data = i2c_read(len)
+             io_error_count = 0
+             return bytearray(data)
+-        except IOError:
+-            io_error_count += 1
+-            if io_error_count > 10:
+-                raise Exception("Flick encoutered more than 10 consecutive I2C IO errors!")
++        except Exception as e:
++            print(e) 
+             return [0,0,0,0,0,0,0,0,0]
+-        finally:
+-            GPIO.setup(SW_XFER_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+ 
+ def _do_poll():
+-    #time.sleep(0.004)
++    time.sleep(0.004)
+     data = _read_msg(26)
+ 
+     d_size  = data.pop(0)
+@@ -502,7 +532,30 @@
+ # Bit 3: idle
+ # Bit 4: invalid values, if values completely out of range
+ # Bit 5: triggered by AFA (Automati Frequency Adjustment)
+-i2c_write([0x10, 0x00, 0x00, 0xa2, 0x80, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00])
++i2c_write([0x10, 0x00, 0x00, 0xa2, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00])
++time.sleep(0.1)
++
++
++
++#7  6  5  4  3  2  1  0     byte[0]
++#15 14 13 12 11 10 9  8     byte[1]
++#23 22 21 20 19 18 17 16    byte[2]
++#31 30 29 28 27 26 25 24    byte[3]
++
++#Enable flick, edge, hold, presence                       [ 1F    00    C0    0F  ]
++#i2c_write([0x10, 0x00, 0x00, 0xA2, 0x85, 0x00, 0x00 ,0x00, 0x1F, 0x00, 0xC0, 0x0F, 0xFF, 0xFF, 0xFF, 0xFF])
++
++#Enable flick, presence (presence detected as hold)       [ 1F    00    80    00  ] 
++i2c_write([0x10, 0x00, 0x00, 0xA2, 0x85, 0x00, 0x00 ,0x00, 0x1F, 0x00, 0x80, 0x00, 0xFF, 0xFF, 0xFF, 0xFF])
++
++#Enable flick, hold, presence                             [ 1F    00    C0    00  ] 
++#i2c_write([0x10, 0x00, 0x00, 0xA2, 0x85, 0x00, 0x00 ,0x00, 0x1F, 0x00, 0xC0, 0x00, 0xFF, 0xFF, 0xFF, 0xFF])
++
++#Enable only flick                                        [ 1F    00    00    00  ] 
++#i2c_write([0x10, 0x00, 0x00, 0xA2, 0x85, 0x00, 0x00 ,0x00, 0x1F, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF])
++
++time.sleep(0.1)
++
+ 
+ # Start read output data thread
+ _start_poll()

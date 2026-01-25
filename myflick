@@ -1,0 +1,639 @@
+#!/usr/bin/env python3
+
+import subprocess
+import asyncio
+import aiohttp
+import json
+import requests
+import sys
+
+import os
+import signal
+import flicklib
+import time
+
+
+
+#from flicklib import GPIO
+import RPi.GPIO as GPIO
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+
+# Kodi connection settings
+KODI_HOST = "127.0.0.1"   # Change to your Kodi IP
+KODI_PORT = 8080          # Default Kodi web server port
+KODI_USER = "kodi"        # Change if you set a username
+KODI_PASS = "kodi"        # Change if you set a password
+
+
+# Use the specific IANA time zone identifier for Indianapolis
+tz = ZoneInfo("America/Indiana/Indianapolis")
+
+
+#Airwheel results
+A_Left  = 31
+A_Right = 32
+
+
+#Flick Results
+F_East        = 11
+F_South       = 12
+F_West        = 13
+F_North       = 14
+F_Hover_High  = 15
+F_Hover_Low   = 16
+
+F_Garbage     = -1     #This will occur randomly and hence is suited only for screen wake up
+
+
+some_value = 5000
+init_t=time.time()
+run_t=time.time()
+
+
+f_result=''
+a_result=''
+z_in = ''
+last_degree=0
+video_active=0
+
+#print(flicklib.__file__)
+
+
+detection = {
+       0: "Empty",
+      11: "East",
+      12: "South",
+      13: "West",
+      14: "North",
+      15: "Hover High",
+      16: "Hover Low",
+      31: "Left",
+      32: "Right"
+}
+
+#Kodi actions when video player is active
+action_video = {
+       0: "Empty",
+      11: "seekback",
+      12: "bigstepforward",
+      13: "seekforward",
+      14: "bigstepback",
+      15: "createbookmark",
+      16: "pause",
+      31: "volumeup",
+      32: "volumedown"
+}
+
+#Kodi actions when video player is not active (UI navigation)
+action_menu = {
+       0: "Empty",
+      11: "left",
+      12: "up",
+      13: "right",
+      14: "down",
+      15: "back",
+      16: "select",
+      31: "pageup",
+      32: "pagedown"
+}
+
+
+
+#ASYNCHRONOUS METHODS--------------------------------------------------------------------------------------------
+
+
+# Send a JSON-RPC request to Kodi asynchronously
+async def kodi_request_(method, params=None):
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": method
+    }
+    if params:
+        payload["params"] = params
+
+    auth = aiohttp.BasicAuth(KODI_USER, KODI_PASS) if KODI_USER and KODI_PASS else None
+
+    try:
+        async with aiohttp.ClientSession(auth=auth) as session:
+            async with session.post(
+                url=f"http://{KODI_HOST}:{KODI_PORT}/jsonrpc",
+                json=payload,
+                headers={"Content-Type": "application/json"}
+            ) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+                return data
+    except aiohttp.ClientError as e:
+        print(f"Network error: {e}")
+    except json.JSONDecodeError:
+        print("Invalid JSON response from Kodi")
+    return None
+
+async def video_seek_(player_id,seek_t):
+
+    if player_id==0:
+        return 0
+        
+    await kodi_request_("Player.Seek",{"playerid": player_id, "value": { "seconds": seek_t } } )
+
+    return 0
+
+
+async def ack_beep_():
+    result = subprocess.run(
+        #mpg321 cannot decode beep.wav correctly 
+        ["aplay","-q", "/home/pi/bin/audio/doublebeep.wav" ],          # Command and arguments as a list
+        capture_output=True,                                           # Capture the standard output
+        text=True,                                                     # Decode output as text (universal_newlines=True in older versions)
+        check=True                                                     # Raise an exception if the command fails
+    )
+
+async def ready_beep_():
+    result = subprocess.run(
+        #mpg321 cannot decode beep.wav correctly
+        ["aplay","-q", "/home/pi/bin/audio/beep.wav" ],                # Command and arguments as a list
+        capture_output=True,                                           # Capture the standard output
+        text=True,                                                     # Decode output as text (universal_newlines=True in older versions)
+        check=True                                                     # Raise an exception if the command fails
+    )
+
+
+
+async def synth_command_(text):
+
+    if text=="":
+      return
+
+    res = gTTS(text=text, lang='en')
+    filename = "/tmp/output.mp3"
+    res.save(filename) 
+
+    result = subprocess.run(
+        ["mpg321", "-q", "-o", "alsa", "-a", "hw:0,0", "/tmp/output.mp3" ],          # Command and arguments as a list
+        capture_output=True,                                                         # Capture the standard output
+        text=True,                                                                   # Decode output as text (universal_newlines=True in older versions)
+        check=True                                                                   # Raise an exception if the command fails
+    )
+
+async def speak_command_(text):
+    filename = "/home/pi/bin/audio/"+text+".wav"
+    result = subprocess.run(
+        ["mpg321", "-q", "-o", "alsa", "-a", "hw:0,0", filename ],          # Command and arguments as a list
+        capture_output=True,                                                # Capture the standard output
+        text=True,                                                          # Decode output as text (universal_newlines=True in older versions)
+        check=True                                                          # Raise an exception if the command fails
+    )
+
+
+async def execute_(command):
+   global video_active
+   global action_menu
+   global action_video
+
+   if command>0:
+   
+    if video_active:
+         v_command=action_video.get(command, "Invalid input")
+         if command<30:
+            if "seek" in v_command:
+               #Seeking only when video is playing
+               if is_video_playing(is_screen_video()):
+                  await speak_command_(v_command)
+                  seek_forward=60
+                  seek_backward=-60
+                  if v_command == "seekforward":
+                     await video_seek_(video_active,seek_forward)
+                  else:
+                     await video_seek_(video_active,seek_backward)
+               #Otherwise, showsubtitles with a flick backward and showtime with flick forward     
+               else:
+                  if v_command == "seekbackward":
+                       await kodi_request_("Input.ExecuteAction", {"action": "showsubtitles" })
+                  if v_command == "seekforward":     
+                       await kodi_request_("Input.ExecuteAction", {"action": "showtime" })  
+                  await kodi_request_("Input.ExecuteAction", {"action": "pause" })         
+         
+            if "bigstepforward" in v_command:
+               #stop if video is paused
+               if not is_video_playing(is_screen_video()):
+                  v_command="stop"
+                  await speak_command_(v_command)
+                  await kodi_request_("Input.ExecuteAction", {"action": v_command })
+               # Otherwise, do bigstepforward   
+               else:
+                  await speak_command_(v_command)
+                  await kodi_request_("Input.ExecuteAction", {"action": v_command })
+               
+            if "bigstepback" in v_command:
+               #stop if video is paused and play the next item
+               if not is_video_playing(is_screen_video()):
+                  await speak_command_("playnext")
+                  await kodi_request_("Input.ExecuteAction", {"action": "stop" })
+                  while is_screen_video():
+                    time.sleep(1)
+                  time.sleep(1)
+                  await kodi_request_("Input.ExecuteAction", {"action": "down" })
+                  time.sleep(1)
+                  await kodi_request_("Input.ExecuteAction", {"action": "select" })
+               # Otherwise, do bigstepback   
+               else:
+                  await speak_command_(v_command)
+                  await kodi_request_("Input.ExecuteAction", {"action": v_command })      
+          
+            if not "seek" in v_command and not "bigstep" in v_command:
+               await speak_command_(v_command)
+               await kodi_request_("Input.ExecuteAction", {"action": v_command })   
+               
+         if command>30:
+               await kodi_request_("Input.ExecuteAction", {"action": v_command })   
+    else:
+         m_command=action_menu.get(command, "Invalid input")
+         if m_command:
+            await speak_command_(m_command) 
+            await kodi_request_("Input.ExecuteAction", {"action": m_command })
+
+
+    return 1
+
+#SYNCHRONOUS METHODS----------------------------------------------------------------------------------------------
+
+#Send a kodi_request synchronously
+def kodi_request(method, params=None):
+    """
+    Send a JSON-RPC request to Kodi and return the parsed JSON response.
+    """
+    url = f"http://{KODI_HOST}:{KODI_PORT}/jsonrpc"
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": method
+    }
+    if params:
+        payload["params"] = params
+
+    try:
+        response = requests.post(url, json=payload, headers=headers, auth=(KODI_USER, KODI_PASS), timeout=5)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        print(f"Error communicating with Kodi: {e}")
+        return None
+
+
+def is_screen_video():
+
+    """Check if Kodi is currently playing a video"""
+    # Get active players
+    players = kodi_request("Player.GetActivePlayers")
+    
+    if not players or "result" not in players:
+        return 0
+
+
+    for player in players["result"]:
+        if player.get("type") == "video":
+
+    # Find video player ID
+             video_player = next((p for p in players["result"] if p["type"] == "video"), None)
+             if not video_player:
+                    return 0  # No video playing
+
+             player_id = video_player["playerid"]
+             
+             return player_id
+    else:
+        return 0
+
+def is_video_playing(player_id):
+
+    
+    if player_id==0:
+        return False
+
+    #Get player properties
+    props = kodi_request("Player.GetProperties", { "playerid" : player_id, "properties" : [ "speed" ] })  
+  
+    if props and "result" in props:
+        return props["result"]["speed"] == 1  # 0 means paused
+    print(props)
+    
+    return False
+
+
+
+
+
+
+def video_seek(player_id,seek_t):
+
+    if player_id==0:
+        return 0
+
+    props = kodi_request("Player.Seek",{"playerid": player_id, "value": { "seconds": seek_t } } )
+
+    return 0
+
+
+
+#Signals detection is complete
+def ack_beep():
+    #mpg321 can't decode beep correctly
+    os.system("aplay -q /home/pi/bin/audio/doublebeep.wav")
+
+#Signals ready for next detection
+def ready_beep():
+    #mpg321 can't decode beep correctly
+    os.system("aplay -q /home/pi/bin/audio/beep.wav")
+
+
+
+def synth_command(text):
+
+    if text=="":
+      return
+
+    res = gTTS(text=text, lang='en')
+    filename = "/tmp/output.mp3"
+    res.save(filename)
+    
+    os.system("mpg321 -q -o alsa -a 'hw:0,0' /tmp/output.mp3")    
+
+
+def speak_command(text):
+    filename = "/home/pi/bin/audio/"+text+".wav" 
+
+    os.system("mpg321 -q -o alsa -a 'hw:0,0' "+filename)
+  
+
+
+def execute(command):
+   global video_active
+   global action_menu
+   global action_video
+   
+   if command>0:
+
+    if video_active:
+         v_command=action_video.get(command, "Invalid input")
+         if command<30:
+            if "seek" in v_command:
+               #Seeking only when video is playing
+               if is_video_playing(is_screen_video()):
+                  speak_command(v_command)
+                  seek_forward=60
+                  seek_backward=-60
+                  if v_command == "seekforward":
+                     video_seek(video_active,seek_forward)
+                  else:
+                     video_seek(video_active,seek_backward)
+               #Otherwise, showsubtitles with a flick backward and showtime with flick forward     
+               else:
+                  if v_command == "seekbackward":
+                       kodi_request("Input.ExecuteAction", {"action": "showsubtitles" })
+                  if v_command == "seekforward":     
+                       kodi_request("Input.ExecuteAction", {"action": "showtime" })  
+                  kodi_request("Input.ExecuteAction", {"action": "pause" })         
+         
+            if "bigstepforward" in v_command:
+               #stop if video is paused
+               if not is_video_playing(is_screen_video()):
+                  v_command="stop"
+                  speak_command(v_command)
+                  kodi_request("Input.ExecuteAction", {"action": v_command })
+               # Otherwise, do bigstepforward   
+               else:
+                  speak_command(v_command)
+                  kodi_request("Input.ExecuteAction", {"action": v_command })
+               
+            if "bigstepback" in v_command:
+               #stop if video is paused and play the next item
+               if not is_video_playing(is_screen_video()):
+                  speak_command("playnext")
+                  kodi_request("Input.ExecuteAction", {"action": "stop" })
+                  while is_screen_video():
+                    time.sleep(1)
+                  time.sleep(1)
+                  kodi_request("Input.ExecuteAction", {"action": "down" })
+                  time.sleep(1)
+                  kodi_request("Input.ExecuteAction", {"action": "select" })
+               # Otherwise, do bigstepback   
+               else:
+                  speak_command(v_command)
+                  kodi_request("Input.ExecuteAction", {"action": v_command })      
+          
+            if not "seek" in v_command and not "bigstep" in v_command:
+               speak_command(v_command)
+               kodi_request("Input.ExecuteAction", {"action": v_command })   
+               
+         if command>30:
+               kodi_request("Input.ExecuteAction", {"action": v_command })   
+    else:
+         m_command=action_menu.get(command, "Invalid input")
+         if m_command:
+            speak_command(m_command) 
+            kodi_request("Input.ExecuteAction", {"action": m_command })
+
+    return 1
+
+
+
+#Asynchronous FLickLib methods for data retrieval----------------------------------------------------------------------------
+
+
+@flicklib.move()
+def move(x, y, z):
+    global z_in
+
+    z_in=z
+
+
+
+@flicklib.flick()
+def flick(i_type,start,finish):
+    global z_in
+    global f_result
+    
+    flicktxt = i_type +' : '+start + ' - ' + finish
+
+    if (i_type=='presence' or i_type=='hold') and (z_in > 0.3):
+            f_result='hover_high'
+
+    if (i_type=='presence' or i_type=='hold') and (z_in < 0.3):
+            f_result='hover_low'
+
+    if (i_type=='flick' and finish=='west'):
+           f_result='move_right'
+
+    if (i_type=='flick' and finish=='east'):
+           f_result='move_left'
+
+    if (i_type=='flick' and finish=='north'):
+           f_result='move_down'
+
+    if (i_type=='flick' and finish=='south'):
+           f_result='move_up'
+
+    if (i_type=='garbage'):
+           f_result='garbage'
+           
+
+
+@flicklib.airwheel()
+def spinny(delta):
+    global some_value
+    global airwheeltxt
+    global a_result
+    global last_degree
+    
+    a_result=''
+
+    some_value += delta
+    if some_value < 0:
+        some_value = 0
+    if some_value > 10000:
+        some_value = 10000
+
+    if last_degree < some_value:
+          a_result='rotated_right'
+    elif last_degree > some_value:
+          a_result='rotated_left'
+    else:
+          a_result=''
+    
+    last_degree = some_value
+
+
+
+
+#Main function-----------------------------------------------------------------------------------------------------------------------
+
+async def main():
+
+    global init_t
+    global run_t
+    global exec_t
+
+    global o_result
+    global video_active
+
+    global a_result
+    global f_result
+
+    global z_in
+    
+    global detection
+
+    init_t=time.time()
+    exec_t=time.time()
+    exec_a=time.time()
+
+    # Update data window continuously until Control-C
+    while True:
+
+        o_result=0
+
+        if not a_result:
+          if not f_result:
+             o_result=0
+          else:
+             if f_result=='hover_high':
+                 f_result=''
+                 o_result=F_Hover_High
+
+             if f_result=='hover_low':
+                 f_result=''
+                 o_result=F_Hover_Low
+
+             if f_result=='move_right':
+                 f_result=''
+                 o_result=F_West
+
+             if f_result=='move_left':
+                 f_result=''
+                 o_result=F_East
+
+             if f_result=='move_down':
+                 f_result=''
+                 o_result=F_North
+
+             if f_result=='move_up':
+                 f_result=''
+                 o_result=F_South
+
+             if f_result=='garbage':
+                 f_result=''
+                 o_result=F_Garbage
+
+        else: 
+
+          if a_result=='rotated_right':
+              a_result=''
+              o_result=A_Right
+
+          if a_result=='rotated_left':
+              a_result=''
+              o_result=A_Left
+    
+        cycle_result=o_result
+        o_result=''
+
+
+        if cycle_result>0:
+             c_command=detection.get(cycle_result, "Invalid input")
+             #local_time = datetime.now(tz)
+             #print(f"{cycle_result:<5}"+" : "f"{c_command:<15}"+" -> "+str(local_time)) 
+             #await ack_beep_()
+             
+
+             #Only beep if detection is not airwheel
+             if cycle_result<30  and time.time()-exec_t>3:
+                   #beep_ signals detection is complete
+                   await ack_beep_()
+                 
+                   exec_t=time.time() 
+                   result=await execute_(cycle_result)      #asynchronous version
+                   #result = execute(cycle_result)          #synchronous version 
+                   if result:
+                      await ready_beep_()
+                   
+             #No beeps necessary if airwheel is detected   
+             if cycle_result>30  and time.time()>exec_a:    
+                   exec_a=time.time()
+                   result=await execute_(cycle_result)
+                 
+        
+        #Garbage flick was detected    
+        if cycle_result<0:
+             #print(f"{cycle_result:<20}") 
+             m_command="backspace"     #choose a benign kodi command to wake up the screen  
+             #kodi_request("Input.ExecuteAction", {"action": m_command })            #synchronous version           
+             await kodi_request_("Input.ExecuteAction", {"action": m_command })      #asynchronous version
+
+        #No detection in this cycle, detect if video is playing, so don't have to detect in execute(command)
+        if cycle_result == 0:
+             video_active =  is_screen_video()   
+             run_t=time.time()
+             #Recalibrate every 60 seconds 
+             if run_t-init_t>60:    
+                   flicklib.recalibrate()
+                   init_t=time.time()
+         
+        cycle_result=0
+
+
+
+        
+        
+        time.sleep(0.1) 
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+
