@@ -481,6 +481,8 @@ def flick(i_type,start,finish):
     if (i_type=='garbage'):
            f_result='garbage'
            
+    
+           
 
 
 @flicklib.airwheel()
@@ -531,6 +533,8 @@ async def main():
     init_t=time.time()
     exec_t=time.time()
     exec_a=time.time()
+    
+    result=1
 
     # Update data window continuously until Control-C
     while True:
@@ -582,24 +586,32 @@ async def main():
         cycle_result=o_result
         o_result=''
 
-
+        if result and time.time()-exec_t>3 and cycle_result==0:
+              await ready_beep_()
+              result=0  
+        
         if cycle_result>0:
              c_command=detection.get(cycle_result, "Invalid input")
-             #local_time = datetime.now(tz)
-             #print(f"{cycle_result:<5}"+" : "f"{c_command:<15}"+" -> "+str(local_time)) 
+             local_time = datetime.now(tz)
+             print(f"{cycle_result:<5}"+" : "f"{c_command:<15}"+" -> "+str(local_time)) 
              #await ack_beep_()
              
 
              #Only beep if detection is not airwheel
-             if cycle_result<30  and time.time()-exec_t>3:
+             if cycle_result<30:
+                if time.time()-exec_t>3:
                    #beep_ signals detection is complete
                    await ack_beep_()
-                 
+                   
                    exec_t=time.time() 
                    result=await execute_(cycle_result)      #asynchronous version
                    #result = execute(cycle_result)          #synchronous version 
-                   if result:
-                      await ready_beep_()
+                   #if result:
+                      #await ready_beep_()
+                if time.time()-exec_t<3:
+                   cycle_result=0 
+                   
+                
                    
              #No beeps necessary if airwheel is detected   
              if cycle_result>30  and time.time()>exec_a:    
@@ -609,7 +621,7 @@ async def main():
         
         #Garbage flick was detected    
         if cycle_result<0:
-             #print(f"{cycle_result:<20}") 
+             print(f"{cycle_result:<20}") 
              m_command="backspace"     #choose a benign kodi command to wake up the screen  
              #kodi_request("Input.ExecuteAction", {"action": m_command })            #synchronous version           
              await kodi_request_("Input.ExecuteAction", {"action": m_command })      #asynchronous version
