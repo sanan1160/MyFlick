@@ -12,14 +12,23 @@ import signal
 import flicklib
 import time
 
-
+import logging
 
 #from flicklib import GPIO
 import RPi.GPIO as GPIO
 
+from gtts import gTTS
+
+
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from collections import deque
+
+# Create a new empty queue
+c_queue = deque()
+c_code=0
+c_time=time.time()
 
 # Kodi connection settings
 KODI_HOST = "127.0.0.1"   # Change to your Kodi IP
@@ -70,14 +79,14 @@ detection = {
       14: "North",
       15: "Hover High",
       16: "Hover Low",
-      31: "Left",
-      32: "Right"
+      31: "Rotate Left",
+      32: "Rotate Right"
 }
 
 #Kodi actions when video player is active
 action_video = {
        0: "Empty",
-      11: "seekback",
+      11: "seekbackward",
       12: "bigstepforward",
       13: "seekforward",
       14: "bigstepback",
@@ -100,7 +109,13 @@ action_menu = {
       32: "pagedown"
 }
 
-
+# Configure the logging
+logging.basicConfig(
+    filename='myflick.log',
+    level=logging.INFO, # Log messages with severity INFO or higher
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filemode='a' # Use 'a' to append to the file, 'w' to overwrite
+)
 
 #ASYNCHRONOUS METHODS--------------------------------------------------------------------------------------------
 
@@ -212,8 +227,10 @@ async def execute_(command):
                #Otherwise, showsubtitles with a flick backward and showtime with flick forward     
                else:
                   if v_command == "seekbackward":
+                       await speak_command_("subtitles")
                        await kodi_request_("Input.ExecuteAction", {"action": "showsubtitles" })
                   if v_command == "seekforward":     
+                       await speak_command_("showtime")
                        await kodi_request_("Input.ExecuteAction", {"action": "showtime" })  
                   await kodi_request_("Input.ExecuteAction", {"action": "pause" })         
          
@@ -394,8 +411,10 @@ def execute(command):
                #Otherwise, showsubtitles with a flick backward and showtime with flick forward     
                else:
                   if v_command == "seekbackward":
+                       speak_command("subtitles")
                        kodi_request("Input.ExecuteAction", {"action": "showsubtitles" })
                   if v_command == "seekforward":     
+                       speak_command("showtime")
                        kodi_request("Input.ExecuteAction", {"action": "showtime" })  
                   kodi_request("Input.ExecuteAction", {"action": "pause" })         
          
@@ -510,7 +529,56 @@ def spinny(delta):
     last_degree = some_value
 
 
+async def decode(seq):
+   global c_code
+   global c_time
+   L_counter=0
+   R_counter=0
+   
+   old_key=0
+   if len(seq)>=5:
+      
+      while seq:
+         key,value = seq.popleft()
+ 
+         if old_key==0:
+            old_key=key
+         if key==31:
+            if old_key==key:
+               L_counter+=1
+               
+            else:
+               L_counter=0
+               
+         if key==32:
+            if old_key==key:
+               R_counter+=1
+            else:
+               R_counter=0
+             
+               
+         old_key=key
 
+    
+      if L_counter>=10:   
+         c_code=1
+         c_time=time.time()
+         speak_command("warning")
+         
+         
+      if c_code==1 and R_counter>=10:
+         c_code=2
+         c_time=time.time()
+         speak_command("shutdownin30seconds")
+       
+     
+      
+   else:
+      if time.time()-c_time>40:
+         c_code=0
+      
+   
+             
 
 #Main function-----------------------------------------------------------------------------------------------------------------------
 
@@ -519,12 +587,16 @@ async def main():
     global init_t
     global run_t
     global exec_t
+    global exec_a
 
     global o_result
     global video_active
 
     global a_result
     global f_result
+    
+    global c_code
+    global c_time
 
     global z_in
     
@@ -535,6 +607,9 @@ async def main():
     exec_a=time.time()
     
     result=1
+    
+    # Create a lock
+    execute_lock = asyncio.Lock()
 
     # Update data window continuously until Control-C
     while True:
@@ -593,51 +668,69 @@ async def main():
         if cycle_result>0:
              c_command=detection.get(cycle_result, "Invalid input")
              local_time = datetime.now(tz)
-             print(f"{cycle_result:<5}"+" : "f"{c_command:<15}"+" -> "+str(local_time)) 
-             #await ack_beep_()
-             
+             #print(f"{cycle_result:<5}"+" : "f"{c_command:<15}"+" -> "+str(local_time)) 
+             logging.info(f"{cycle_result:<5}"+" : "f"{c_command:<15}"+" -> "+str(local_time))
 
              #Only beep if detection is not airwheel
              if cycle_result<30:
-                if time.time()-exec_t>3:
-                   #beep_ signals detection is complete
-                   await ack_beep_()
-                   
-                   exec_t=time.time() 
-                   result=await execute_(cycle_result)      #asynchronous version
-                   #result = execute(cycle_result)          #synchronous version 
-                   #if result:
-                      #await ready_beep_()
+             
                 if time.time()-exec_t<3:
-                   cycle_result=0 
+                   cycle_result=0                            # Setup for calibration instead  
+                   logging.info('  \\-----------------------------Ignored, too early ')
                    
+                elif time.time()-exec_t>=3:
+                   if execute_lock.locked():
+                       logging.info('  \\-----------------------------Dropped, still busy ')  
+                   async with execute_lock: 
+                       #beep_ signals detection is complete
+                       logging.info('\\-----------------------------EXECUTED') # Detection came after 3 seconds and previous execute() function has returned
+                      
+                       await ack_beep_()                   
+                       exec_t=time.time() 
+                       result=await execute_(cycle_result)      #asynchronous version
+                       
                 
                    
              #No beeps necessary if airwheel is detected   
              if cycle_result>30  and time.time()>exec_a:    
                    exec_a=time.time()
                    result=await execute_(cycle_result)
-                 
+                   if not is_video_playing(is_screen_video()):
+                       c_queue.append((cycle_result,exec_a)) 
+                       
         
         #Garbage flick was detected    
         if cycle_result<0:
              print(f"{cycle_result:<20}") 
              m_command="backspace"     #choose a benign kodi command to wake up the screen  
-             #kodi_request("Input.ExecuteAction", {"action": m_command })            #synchronous version           
              await kodi_request_("Input.ExecuteAction", {"action": m_command })      #asynchronous version
 
         #No detection in this cycle, detect if video is playing, so don't have to detect in execute(command)
         if cycle_result == 0:
-             video_active =  is_screen_video()   
+             video_active =  is_screen_video()  
+             #Process the c_queue for shutdown sequence
+             if not is_video_playing(is_screen_video()):
+                 await decode(c_queue)
+                 if time.time()-c_time>30 and c_code==2:
+                     await speak_command_("shuttingdown")
+                     os.system("sudo shutdown -h now")
+                     
+             else:
+                 if time.time()-c_time<30 and c_code==2:
+                     await speak_command_("cancelshutdown")
+                     c_time=0 
+                     c_code=0
              run_t=time.time()
              #Recalibrate every 60 seconds 
              if run_t-init_t>60:    
                    flicklib.recalibrate()
                    init_t=time.time()
          
+        
+             
         cycle_result=0
 
-
+        
 
         
         
@@ -648,4 +741,4 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 
-
+ex
