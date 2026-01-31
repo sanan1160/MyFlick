@@ -1,0 +1,10 @@
+[Unit]
+After=network.target
+
+[Service]
+ExecStart=/home/pi/bin/myflick
+Environment="TERM=linux"
+Environment="TERMINFO=/etc/terminfo"
+PrivateTmp=true
+[Install]
+WantedBy=default.target

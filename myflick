@@ -6,12 +6,11 @@ import aiohttp
 import json
 import requests
 import sys
-
+import psutil
 import os
 import signal
 import flicklib
 import time
-
 import logging
 
 #from flicklib import GPIO
@@ -19,15 +18,26 @@ import RPi.GPIO as GPIO
 
 from gtts import gTTS
 
-
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from collections import deque
 
+
+#debug=True
+
+#Adjust process priority
+process = psutil.Process(os.getpid())
+os_used = sys.platform
+process.nice(-20)
+
 # Create a new empty queue
 c_queue = deque()
+
+
+#shutdown signal
 c_code=0
+#shutdown timer
 c_time=time.time()
 
 # Kodi connection settings
@@ -39,6 +49,12 @@ KODI_PASS = "kodi"        # Change if you set a password
 
 # Use the specific IANA time zone identifier for Indianapolis
 tz = ZoneInfo("America/Indiana/Indianapolis")
+
+#delay imposed between flick executes
+flick_interval=1
+
+#ignore execute commands if delayed by this much from flick detection
+flick_expire=3
 
 
 #Airwheel results
@@ -58,15 +74,41 @@ F_Garbage     = -1     #This will occur randomly and hence is suited only for sc
 
 
 some_value = 5000
+
+
+#recalibration timer
 init_t=time.time()
 run_t=time.time()
 
+#timer for flick executes
+exec_t=time.time()
 
+#timer for airwheel executes, not really used except recordkeeping
+exec_a=time.time()
+
+#flick result
 f_result=''
+
+#when flick returned a recognition
+f_time=time.time()
+
+#airwheel result
 a_result=''
+
+#last Z value
 z_in = ''
+
+#last rotation value
 last_degree=0
+
+#we have a video player screen
 video_active=0
+
+#video player is playing video or paused
+video_playing=False
+
+
+local_time=datetime.now(tz)
 
 #print(flicklib.__file__)
 
@@ -92,8 +134,8 @@ action_video = {
       14: "bigstepback",
       15: "createbookmark",
       16: "pause",
-      31: "volumeup",
-      32: "volumedown"
+      31: "volumedown",
+      32: "volumeup"
 }
 
 #Kodi actions when video player is not active (UI navigation)
@@ -111,7 +153,7 @@ action_menu = {
 
 # Configure the logging
 logging.basicConfig(
-    filename='myflick.log',
+    filename='/home/pi/bin/myflick.log',
     level=logging.INFO, # Log messages with severity INFO or higher
     format='%(asctime)s - %(levelname)s - %(message)s',
     filemode='a' # Use 'a' to append to the file, 'w' to overwrite
@@ -164,7 +206,7 @@ async def ack_beep_():
         ["aplay","-q", "/home/pi/bin/audio/doublebeep.wav" ],          # Command and arguments as a list
         capture_output=True,                                           # Capture the standard output
         text=True,                                                     # Decode output as text (universal_newlines=True in older versions)
-        check=True                                                     # Raise an exception if the command fails
+        check=False                                                    # Raise an exception if the command fails
     )
 
 async def ready_beep_():
@@ -173,7 +215,7 @@ async def ready_beep_():
         ["aplay","-q", "/home/pi/bin/audio/beep.wav" ],                # Command and arguments as a list
         capture_output=True,                                           # Capture the standard output
         text=True,                                                     # Decode output as text (universal_newlines=True in older versions)
-        check=True                                                     # Raise an exception if the command fails
+        check=False                                                    # Raise an exception if the command fails
     )
 
 
@@ -191,7 +233,7 @@ async def synth_command_(text):
         ["mpg321", "-q", "-o", "alsa", "-a", "hw:0,0", "/tmp/output.mp3" ],          # Command and arguments as a list
         capture_output=True,                                                         # Capture the standard output
         text=True,                                                                   # Decode output as text (universal_newlines=True in older versions)
-        check=True                                                                   # Raise an exception if the command fails
+        check=False                                                                  # Raise an exception if the command fails
     )
 
 async def speak_command_(text):
@@ -200,23 +242,36 @@ async def speak_command_(text):
         ["mpg321", "-q", "-o", "alsa", "-a", "hw:0,0", filename ],          # Command and arguments as a list
         capture_output=True,                                                # Capture the standard output
         text=True,                                                          # Decode output as text (universal_newlines=True in older versions)
-        check=True                                                          # Raise an exception if the command fails
+        check=False                                                         # Raise an exception if the command fails
     )
 
 
 async def execute_(command):
    global video_active
+   global video_playing
    global action_menu
    global action_video
+   global f_time
+   global local_time
+   global exec_t
 
    if command>0:
-   
+    exec_t=time.time() 
     if video_active:
          v_command=action_video.get(command, "Invalid input")
+
          if command<30:
+            local_time = datetime.now(tz)
+            if time.time()-f_time>flick_expire:
+                 local_f_time = datetime.fromtimestamp(f_time)
+                 logging.info("  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> Dropped Delayed : "+str(local_f_time)+" Now: "+str(local_time))
+                 return 1
+            else:
+                 logging.info("  \\----------------------------- EXECUTED :  "+str(local_time))
+    
             if "seek" in v_command:
                #Seeking only when video is playing
-               if is_video_playing(is_screen_video()):
+               if video_playing:
                   await speak_command_(v_command)
                   seek_forward=60
                   seek_backward=-60
@@ -236,7 +291,7 @@ async def execute_(command):
          
             if "bigstepforward" in v_command:
                #stop if video is paused
-               if not is_video_playing(is_screen_video()):
+               if not video_playing:
                   v_command="stop"
                   await speak_command_(v_command)
                   await kodi_request_("Input.ExecuteAction", {"action": v_command })
@@ -247,7 +302,7 @@ async def execute_(command):
                
             if "bigstepback" in v_command:
                #stop if video is paused and play the next item
-               if not is_video_playing(is_screen_video()):
+               if not video_playing:
                   await speak_command_("playnext")
                   await kodi_request_("Input.ExecuteAction", {"action": "stop" })
                   while is_screen_video():
@@ -275,6 +330,58 @@ async def execute_(command):
 
 
     return 1
+
+
+async def decode(seq):
+   global c_code
+   global c_time
+   L_counter=0
+   R_counter=0
+   
+   old_key=0
+   if len(seq)>=5:
+      
+      while seq:
+         key,value = seq.popleft()
+ 
+         if old_key==0:
+            old_key=key
+         if key==31:
+            if old_key==key:
+               L_counter+=1
+               
+            else:
+               L_counter=0
+               
+         if key==32:
+            if old_key==key:
+               R_counter+=1
+            else:
+               R_counter=0
+             
+               
+         old_key=key
+
+    
+      if L_counter>=10:   
+         c_code=1
+         c_time=time.time()
+         logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 1 :  '+str(L_counter)+" Left Airwheel revolutions")  
+         speak_command("warning")     
+         
+      if c_code==1 and R_counter>=10:
+         c_code=2
+         c_time=time.time()
+         logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 2 :  '+str(R_counter)+" Right Airwheel revolutions")
+         logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 2 :  Shutdown in 30 seconds unless video playback resumes')
+         speak_command("shutdownin30seconds")
+         
+   else:
+      if time.time()-c_time>40 and c_code==1:
+         logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 0 : Timer for Stage 2 expired ')  
+         c_code=0
+      
+
 
 #SYNCHRONOUS METHODS----------------------------------------------------------------------------------------------
 
@@ -337,7 +444,7 @@ def is_video_playing(player_id):
   
     if props and "result" in props:
         return props["result"]["speed"] == 1  # 0 means paused
-    print(props)
+    #print(props)
     
     return False
 
@@ -476,8 +583,11 @@ def move(x, y, z):
 def flick(i_type,start,finish):
     global z_in
     global f_result
-    
-    flicktxt = i_type +' : '+start + ' - ' + finish
+    global f_time
+
+    #flicktxt = i_type +' : '+start + ' - ' + finish
+
+    f_result=''
 
     if (i_type=='presence' or i_type=='hold') and (z_in > 0.3):
             f_result='hover_high'
@@ -500,7 +610,9 @@ def flick(i_type,start,finish):
     if (i_type=='garbage'):
            f_result='garbage'
            
-    
+    if f_result!='':
+           f_time=time.time()
+           #logging.info("Flick : Detected gesture -> "+finish+" at "+str(time.time()))    
            
 
 
@@ -529,54 +641,7 @@ def spinny(delta):
     last_degree = some_value
 
 
-async def decode(seq):
-   global c_code
-   global c_time
-   L_counter=0
-   R_counter=0
-   
-   old_key=0
-   if len(seq)>=5:
-      
-      while seq:
-         key,value = seq.popleft()
- 
-         if old_key==0:
-            old_key=key
-         if key==31:
-            if old_key==key:
-               L_counter+=1
-               
-            else:
-               L_counter=0
-               
-         if key==32:
-            if old_key==key:
-               R_counter+=1
-            else:
-               R_counter=0
-             
-               
-         old_key=key
 
-    
-      if L_counter>=10:   
-         c_code=1
-         c_time=time.time()
-         speak_command("warning")
-         
-         
-      if c_code==1 and R_counter>=10:
-         c_code=2
-         c_time=time.time()
-         speak_command("shutdownin30seconds")
-       
-     
-      
-   else:
-      if time.time()-c_time>40:
-         c_code=0
-      
    
              
 
@@ -591,6 +656,7 @@ async def main():
 
     global o_result
     global video_active
+    global video_playing
 
     global a_result
     global f_result
@@ -601,7 +667,9 @@ async def main():
     global z_in
     
     global detection
-
+    global flick_interval
+    global local_time
+ 
     init_t=time.time()
     exec_t=time.time()
     exec_a=time.time()
@@ -611,6 +679,10 @@ async def main():
     # Create a lock
     execute_lock = asyncio.Lock()
 
+    video_active =  is_screen_video()
+    video_playing =  is_video_playing(video_active) 
+    flicklib.recalibrate() 
+    
     # Update data window continuously until Control-C
     while True:
 
@@ -661,62 +733,68 @@ async def main():
         cycle_result=o_result
         o_result=''
 
-        if result and time.time()-exec_t>3 and cycle_result==0:
+        if result and time.time()-exec_t>flick_interval and cycle_result==0:
               await ready_beep_()
               result=0  
+
         
         if cycle_result>0:
              c_command=detection.get(cycle_result, "Invalid input")
              local_time = datetime.now(tz)
              #print(f"{cycle_result:<5}"+" : "f"{c_command:<15}"+" -> "+str(local_time)) 
-             logging.info(f"{cycle_result:<5}"+" : "f"{c_command:<15}"+" -> "+str(local_time))
+             logging.info(f"{cycle_result:<5}"+" : "f"{c_command:<15}"+" Received at ->       "+str(local_time))
 
              #Only beep if detection is not airwheel
              if cycle_result<30:
-             
-                if time.time()-exec_t<3:
+                await ack_beep_() 
+                if time.time()-exec_t<flick_interval:
                    cycle_result=0                            # Setup for calibration instead  
-                   logging.info('  \\-----------------------------Ignored, too early ')
+                   logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> Dropped Ignored, too early ')
                    
-                elif time.time()-exec_t>=3:
+                elif time.time()-exec_t>=flick_interval:
                    if execute_lock.locked():
-                       logging.info('  \\-----------------------------Dropped, still busy ')  
+                       logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> Dropped Busy ')  
                    async with execute_lock: 
                        #beep_ signals detection is complete
-                       logging.info('\\-----------------------------EXECUTED') # Detection came after 3 seconds and previous execute() function has returned
+                       #logging.info('\\-----------------------------EXECUTED') # Detection came after 3 seconds and previous execute() function has returned
                       
-                       await ack_beep_()                   
-                       exec_t=time.time() 
+                       #await ack_beep_()                   
+                       #exec_t=time.time() 
                        result=await execute_(cycle_result)      #asynchronous version
                        
                 
                    
              #No beeps necessary if airwheel is detected   
-             if cycle_result>30  and time.time()>exec_a:    
+             #if cycle_result>30  and time.time()>exec_a:
+             if cycle_result>30:    
                    exec_a=time.time()
                    result=await execute_(cycle_result)
-                   if not is_video_playing(is_screen_video()):
+                   if not video_playing:
                        c_queue.append((cycle_result,exec_a)) 
                        
         
         #Garbage flick was detected    
         if cycle_result<0:
-             print(f"{cycle_result:<20}") 
+             #print(f"{cycle_result:<20}") 
+             logging.info(f"{cycle_result:<5}"+" : "f"{c_command:<15}"+" Received at ->       "+str(local_time))
              m_command="backspace"     #choose a benign kodi command to wake up the screen  
              await kodi_request_("Input.ExecuteAction", {"action": m_command })      #asynchronous version
 
         #No detection in this cycle, detect if video is playing, so don't have to detect in execute(command)
         if cycle_result == 0:
-             video_active =  is_screen_video()  
+             video_active =  is_screen_video()
+             video_playing =  is_video_playing(video_active) 
              #Process the c_queue for shutdown sequence
-             if not is_video_playing(is_screen_video()):
+             if not video_playing:
                  await decode(c_queue)
                  if time.time()-c_time>30 and c_code==2:
+                     logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 3 : Shutting Down ')  
                      await speak_command_("shuttingdown")
                      os.system("sudo shutdown -h now")
                      
              else:
                  if time.time()-c_time<30 and c_code==2:
+                     logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 0 : Shutdown Aborted by User ')  
                      await speak_command_("cancelshutdown")
                      c_time=0 
                      c_code=0
@@ -741,4 +819,4 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 
-ex
+
