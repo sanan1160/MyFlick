@@ -21,27 +21,66 @@ Flicklib patch includes the following changes:
    13. double north south
 
    Some caveats:
-   1. Enabling more gestures reduces the accuracy of gesture recognition. In my testing for example, enabling doubles made it        hard to detect normal flicks.
+   1. Enabling more gestures reduces the accuracy of gesture recognition. In my testing for example, enabling doubles made it hard to detect normal flicks.
    2. Hold seems to be the most reliable gesture recognized as flicks seem to have a speed requirement.
-   3. When hold is detected after 3 seconds, presence is detected after the next second. This results in two consecutive             recognitions. So i disabled hold in order to use presence. However, the detection from the board returns a hold instead        of a presence.
+   3. When hold is detected after 3 seconds, presence is detected after the next second. This results in two consecutive recognitions. So i disabled hold in order to use presence. However, the detection from the board returns a hold instead        of a presence.
    4. The flick-demo has to be adjusted to account for three arguments to @flicklib.flick()
       def flick(i_type,start,finish):
+   5. No point in testing the sequence byte to remove duplicates. It resulted in less accurate flick recognitions.
 
-3. Enabled auto calibration.  The original flicklib had auto calibration disabled, resulting in ghost gesture detections.
-4. Added recalibrate method. In my testing, a recalibration every minute seemed optimal. But I have my flick board in front of the TV set where the EM field might be continually changing.
-5. I ran into seemingly random GPIO busy errors so I modifed flicklib to swallow the errors in _read_msg(len=132) and  def i2c_read(len).
-6. The default configuration for the patched flicklib only enables: Flick: garbage, presence(returned as hold), flick east-west, flick west-east, flick north-south, flick south-north, airwheel CW, airwheel CCW.
+2. Enabled auto calibration.  The original flicklib had auto calibration disabled, resulting in ghost gesture detections.
+3. Added recalibrate method. In my testing, a recalibration every minute seemed optimal. But I have my flick board in front of the TV set where the EM field might be continually changing.
+4. I ran into seemingly random GPIO busy errors so I modifed flicklib to swallow the errors in _read_msg(len=132) and  def i2c_read(len).
+5. The default configuration for the patched flicklib only enables: Flick: garbage, presence(returned as hold), flick east-west, flick west-east, flick north-south, flick south-north, airwheel CW, airwheel CCW.
 
 MyFlick - Gesture control for Kodi 
+
 1. Due to the ability of setting the state of video playback to pause or play, combinations are now possible where you use hold to pause/play and use this as a condition for another action: For example, hold to pause, then flick north can be assigned to a different action or action combo based on wether playback is in pause or play.
 2. A ack_beep or acknowledge beep lets me know if a gesture is recognized which is mostly important for hold gesture. A ready_beep informs me that the script is ready for another recognition. The ack_beep does not guarantee execute of the gesture.
 3. By evaluating the value of Z, you can further qualify hold as hover high or hover low, allowing two assignable actions.
 4. Its best to presynthesize the speech files into wav files to cut down on cpu processing
-5. The garbage model is useful only for waking up the screen as it will occur whenever there is electromagnetic noise on top of the board so I assigned it to pressing Backspace as I don't know of any more direct way of turning off the screensaver on an as needed basis.
-6. A recalibration every 60 seconds seems optimal in my setup.
-7. A shutdown sequence is implemented to shutdown the raspberry pi.  This is done by performing a certain amount of Left Airwheel and then Right airwheel while video is paused. Unpausing cancels the shutdown.
+5. The garbage model is only useful for waking up the screen as it will occur whenever there is electromagnetic noise on top of the board so I assigned it to pressing Backspace as I don't know of any more direct way of turning off the screensaver on an as needed basis.
+6. A recalibration every 60 seconds seems optimal in my setup. User can force a recalibration by instantiating garbage detections to a set limit (twiddle your fingers on top of the board a few times).  A long beep is played to warn to remove hand from top of board before recalibration triggered by garbage count.  The garbage count will be cleared at each recalibration (interval or garbage count triggered)  so hopefully the long beep only will serve for user intended recalibrations if interval recalibrations occur frequently enough.   
+7. Onboard LEDS ACT and PWR are used as visual cues.  ACT (Green LED) signals readiness for detection. PWR (Red LED) signals WAIT ( execute() running, recalibration in process, still within the imposed flick interval). This is unfortunately board specific and my settings are for RPI 3B+.
 8. Process priority is adjusted by the script, requiring root privileges. Therefore, a systemd service script is included to start myflick. 
+9. Flick gestures are limited to 1 per flick_interval (1 second) and expired after flick_expire (3 seconds). Execute() will only execute the last flick detection and throw away the earlier ones to avoid queueing. Airwheel has no interval limit but in the general UI, it will be interrupted by speech playback so page up and page down will execute one step at a time. 
+10. There is code for sending 12 byte and 16 byte Gestic Library Messages for anyone who wishes to experiment.
+11. A logging facility is included. Useful to watch the log with tail -f myflick.log
 
-This is a work in progress.  Without patching flicklib, I had to restart my script every 5 minutes with a systemd service becuase it was either detecting ghost gestures or it has run into the gpio busy error.  I have run this for a full day now with no issue.  Use at your own risk of course. 
 
-I would like to find out how to set the timeout for hold and presence with an i2c command. So please let me know if you come across this. 
+My RPI is upside down with the HDMI port facing the TV so the compass directions are reversed. 
+
+Kodi Actions Implemented while video is playing:
+
+1. West - Seek 1 minute forward
+2. East - Seek 1 minute backward
+3. North - Jump 10 minutes backward
+4. South - Jump 10 minutes forward
+5. Hover Low - Pause
+6. Hover High - Create Bookmark
+7. Airwheel Left - Volume down
+8. Airwheel Right - Volume up
+
+
+Kodi actions implemted while video is paused:
+
+1. West - Enable/Disable video timebar and clock
+2. East - Enable/Disable subtitles
+3. North - Stop Video, Move Down 1 line in the directory, Select video -> Play the next video in the directory
+4. South - Stop video
+5. 10 Left Airwheel (Stage 1 shutdown) and within 40 seconds followed by 10 Right Airwheel (Stage 2 shutdown) -> Shutdown in 30 seconds. Cancel shutdown by resuming playback. If 10 Right airwheel did not occur within 40 seconds after 10 Left Airwheel, then the Shutdown sequence is cleared (Stage 0).  
+
+Kodi actions implemented in the general UI:
+
+1. West - Right
+2. East - Left
+3. North - Down 1 item
+4. South - Up 1 item
+5. Hover Low - Select
+6. Hover High - Back
+7. Airwheel Left - Page Up
+8. Airwheel Right - Page Down
+
+This is a work in progress.  Without patching flicklib, I had to restart my script every 5 minutes with a systemd service becuase it was either detecting ghost gestures or it has run into the gpio busy error.  Use at your own risk of course. 
+
+I would like to find out how to set the timeout for hold and presence with an i2c command. So please let me know if you come across this or any other useful i2c commands. 

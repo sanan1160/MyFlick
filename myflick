@@ -12,33 +12,18 @@ import signal
 import flicklib
 import time
 import logging
+import atexit
 
-#from flicklib import GPIO
 import RPi.GPIO as GPIO
-
 from gtts import gTTS
-
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
 from collections import deque
 
 
 #debug=True
 
-#Adjust process priority
-process = psutil.Process(os.getpid())
-os_used = sys.platform
-process.nice(-20)
-
-# Create a new empty queue
-c_queue = deque()
-
-
-#shutdown signal
-c_code=0
-#shutdown timer
-c_time=time.time()
+#User configured parameters START: --------------------------------------------------------------------------
 
 # Kodi connection settings
 KODI_HOST = "127.0.0.1"   # Change to your Kodi IP
@@ -46,84 +31,23 @@ KODI_PORT = 8080          # Default Kodi web server port
 KODI_USER = "kodi"        # Change if you set a username
 KODI_PASS = "kodi"        # Change if you set a password
 
-
-# Use the specific IANA time zone identifier for Indianapolis
+# Use the specific IANA time zone identifer for local time
 tz = ZoneInfo("America/Indiana/Indianapolis")
 
 #delay imposed between flick executes
 flick_interval=1
 
-#ignore execute commands if delayed by this much from flick detection
+#ignore execute commands if delayed by this much from flick detection time
 flick_expire=3
 
+#Maximum garbage recognition before recalibration is forced
+max_garbage=4
 
-#Airwheel results
-A_Left  = 31
-A_Right = 32
+#Recalibrate every N seconds
+recalibration_interval=60
 
-
-#Flick Results
-F_East        = 11
-F_South       = 12
-F_West        = 13
-F_North       = 14
-F_Hover_High  = 15
-F_Hover_Low   = 16
-
-F_Garbage     = -1     #This will occur randomly and hence is suited only for screen wake up
-
-
-some_value = 5000
-
-
-#recalibration timer
-init_t=time.time()
-run_t=time.time()
-
-#timer for flick executes
-exec_t=time.time()
-
-#timer for airwheel executes, not really used except recordkeeping
-exec_a=time.time()
-
-#flick result
-f_result=''
-
-#when flick returned a recognition
-f_time=time.time()
-
-#airwheel result
-a_result=''
-
-#last Z value
-z_in = ''
-
-#last rotation value
-last_degree=0
-
-#we have a video player screen
-video_active=0
-
-#video player is playing video or paused
-video_playing=False
-
-
-local_time=datetime.now(tz)
-
-#print(flicklib.__file__)
-
-
-detection = {
-       0: "Empty",
-      11: "East",
-      12: "South",
-      13: "West",
-      14: "North",
-      15: "Hover High",
-      16: "Hover Low",
-      31: "Rotate Left",
-      32: "Rotate Right"
-}
+#wether to use onboard LEDs for visual cue: RED -> don't do gestures ; GREEN -> open for gestures
+use_leds=True
 
 #Kodi actions when video player is active
 action_video = {
@@ -151,6 +75,98 @@ action_menu = {
       32: "pagedown"
 }
 
+
+#User configured paramters END: -----------------------------------------------------------------------------
+
+
+#Adjust process priority
+process = psutil.Process(os.getpid())
+os_used = sys.platform
+process.nice(-20)
+
+# Create a new empty queue
+c_queue = deque()
+f_queue = deque()
+
+#shutdown signal
+c_code=0
+#shutdown timer
+c_time=time.time()
+
+
+#Airwheel results
+A_Left  = 31
+A_Right = 32
+
+#Flick Results
+F_East        = 11
+F_South       = 12
+F_West        = 13
+F_North       = 14
+F_Hover_High  = 15
+F_Hover_Low   = 16
+
+F_Garbage     = -1     #This will occur randomly and hence is suited only for screen wake up
+
+
+garbage_count = 0
+some_value = 5000
+
+
+#recalibration timer
+init_t=time.time()
+run_t=time.time()
+
+#timer for flick executes
+exec_t=time.time()
+
+#timer for airwheel executes, not really used except recordkeeping
+exec_a=time.time()
+
+#flick result
+f_result=''
+
+#when flick returned a recognition
+f_time=time.time()
+
+#airwheel result
+a_result=''
+
+#last X,Y,Z values
+z_in = ''
+x_in = ''
+y_in = ''
+
+#last rotation value
+last_degree=0
+
+#we have a video player screen
+video_active=0
+
+#video player is playing video or paused
+video_playing=False
+
+permit_recalibrate=True
+
+local_time=datetime.now(tz)
+
+#print(flicklib.__file__)
+
+
+detection = {
+       0: "Empty",
+      11: "East",
+      12: "South",
+      13: "West",
+      14: "North",
+      15: "Hover High",
+      16: "Hover Low",
+      31: "Rotate Left",
+      32: "Rotate Right"
+}
+
+
+
 # Configure the logging
 logging.basicConfig(
     filename='/home/pi/bin/myflick.log',
@@ -159,6 +175,15 @@ logging.basicConfig(
     filemode='a' # Use 'a' to append to the file, 'w' to overwrite
 )
 
+def cleanup_leds():
+    if not use_leds:
+       return
+    logging.info("Resetting LEDS to default")
+    os.system("echo mmc0 | sudo tee  /sys/class/leds/ACT/trigger")
+    os.system("echo input | sudo tee /sys/class/leds/PWR/trigger")
+
+
+atexit.register(cleanup_leds)
 #ASYNCHRONOUS METHODS--------------------------------------------------------------------------------------------
 
 
@@ -197,7 +222,7 @@ async def video_seek_(player_id,seek_t):
         
     await kodi_request_("Player.Seek",{"playerid": player_id, "value": { "seconds": seek_t } } )
 
-    return 0
+    return 0 
 
 
 async def ack_beep_():
@@ -261,8 +286,9 @@ async def execute_(command):
          v_command=action_video.get(command, "Invalid input")
 
          if command<30:
-            local_time = datetime.now(tz)
+            
             if time.time()-f_time>flick_expire:
+                 local_time = datetime.now(tz)
                  local_f_time = datetime.fromtimestamp(f_time)
                  logging.info("  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> Dropped Delayed : "+str(local_f_time)+" Now: "+str(local_time))
                  return 1
@@ -328,7 +354,8 @@ async def execute_(command):
             await speak_command_(m_command) 
             await kodi_request_("Input.ExecuteAction", {"action": m_command })
 
-
+    while f_queue:
+            f_queue.popleft()
     return 1
 
 
@@ -474,7 +501,8 @@ def ready_beep():
     #mpg321 can't decode beep correctly
     os.system("aplay -q /home/pi/bin/audio/beep.wav")
 
-
+def warn_beep():
+    os.system("aplay -q /home/pi/bin/audio/longbeep.wav")
 
 def synth_command(text):
 
@@ -493,6 +521,19 @@ def speak_command(text):
 
     os.system("mpg321 -q -o alsa -a 'hw:0,0' "+filename)
   
+
+
+def act_led(l_state):
+    if not use_leds:
+       return
+    with open('/sys/class/leds/ACT/brightness', 'w') as f:
+       f.write(l_state)
+
+def pwr_led(l_state):
+    if not use_leds:
+       return
+    with open('/sys/class/leds/PWR/brightness', 'w') as f:
+       f.write(l_state)
 
 
 def execute(command):
@@ -574,9 +615,12 @@ def execute(command):
 @flicklib.move()
 def move(x, y, z):
     global z_in
+    global y_in
+    global x_in
 
     z_in=z
-
+    x_in=x
+    y_in=y
 
 
 @flicklib.flick()
@@ -584,15 +628,19 @@ def flick(i_type,start,finish):
     global z_in
     global f_result
     global f_time
+    global permit_recalibrate
+    global garbage_count
+
+    permit_recalibrate=False
 
     #flicktxt = i_type +' : '+start + ' - ' + finish
 
     f_result=''
 
-    if (i_type=='presence' or i_type=='hold') and (z_in > 0.3):
+    if (i_type=='presence' or i_type=='hold') and (float(z_in) > 0.3):
             f_result='hover_high'
 
-    if (i_type=='presence' or i_type=='hold') and (z_in < 0.3):
+    if (i_type=='presence' or i_type=='hold') and (float(z_in) < 0.3):
             f_result='hover_low'
 
     if (i_type=='flick' and finish=='west'):
@@ -607,14 +655,15 @@ def flick(i_type,start,finish):
     if (i_type=='flick' and finish=='south'):
            f_result='move_up'
 
-    if (i_type=='garbage'):
+    if  (i_type=='garbage'):
            f_result='garbage'
+           garbage_count+=1
            
-    if f_result!='':
+    if f_result:
            f_time=time.time()
-           #logging.info("Flick : Detected gesture -> "+finish+" at "+str(time.time()))    
-           
-
+           f_queue.append((f_result,f_time))
+              
+    permit_recalibrate=True
 
 @flicklib.airwheel()
 def spinny(delta):
@@ -641,9 +690,169 @@ def spinny(delta):
     last_degree = some_value
 
 
+#Debug
 
+#Request Message format si 12 bytes
+
+def send16():  
+    #Set runtime parameter request code
+    #Test code is 16 bytes, returns 16 bytes
+
+    flicklib._stop_poll()       #[ set runtime param    ][Runtime param ID  ][ Reserved     ][  Argument 0            ][     Argument 1         ]
+                       #[size=x10=16   ID=0xa2 ][ x1000 or LE 0010 ][ for response ]        
+                       #  0      1    2      3       4    5             6     7        8     9     10    11      12    13    14     15         
+
+    #Trigger recalibration OK
+    #flicklib.i2c_write( [0x10, 0x00, 0x00, 0xa2,   0x00, 0x10,        0x00, 0x00,     0x00, 0x00, 0x00, 0x00,   0x00, 0x00, 0x00, 0x00])
+    
+
+    #set gestures OK
+    #flicklib.i2c_write([0x10, 0x00, 0x00, 0xA2, 0x85, 0x00, 0x00 ,0x00, 0x1F, 0x00, 0x80, 0x00, 0xFF, 0xFF, 0xFF, 0xFF])
+
+
+    handle_response16(flicklib._read_msg(16))
+
+
+def handle_response16(data):
+
+    #Response format in 16 bytes
+                       #[size=x10=16 Flags Seq   ID=0xa2 ][ MsgID MaxCommandSize ][ Error code   ][   Argument 0 reserved  ][   Argument 1 reserved   ]     
+                       #  0            1    2       3         4        5               6     7        8     9     10    11      12    13    14     15         
+            
+    print("Data is : "+str(data))
+    #check if we have an error loaded in byte 7
+    flicklib._handle_status_info(data) 
+    d_size  = data.pop(0)
+    if d_size == 0:
+            print("No return message")
+    else:
+        print("Size is : "+str(hex(d_size)))
+        d_flags = data.pop(0)
+        print("Flags is : "+str(hex(d_flags)))
+        d_seq   = data.pop(0)
+        print("Sequence is : "+str(hex(d_seq)))
+        d_ident = data.pop(0)
+        print("ID is : "+str(hex(d_ident)))
+        d_param = data.pop(0)
+        print("Param ID is : "+str(hex(d_param)))
+        d_cmd_size =  data.pop(0)
+        print("Max Command size is : "+str(hex(d_cmd_size)))
+        d_err0 =  data.pop(0)
+        print("Error byte 0 is : "+str(hex(d_err0)))
+        d_err1 =  data.pop(0)
+        print("Error byte 1 is : "+str(hex(d_err1)))
+
+        argument0=data[0:4]
+        print("Argument 0 is : "+str(argument0))
    
-             
+
+        argument1=data[4:9]
+        print("Argument 1 is : "+str(argument1))
+
+    exit()
+
+
+def send12():
+    #Message Request code
+    #Test code 12 bytes, returns 16 bytes
+
+    flicklib._stop_poll()       
+
+                       #Request message can only be performed with xA2 or x83 
+                       #[size=x0c=12       ID=0x06 ][ MsgID=A2 ][    Reserved     ][      Param in LE            ] 
+                       #  0      1    2      3           4         5    6    7        8     9     10    11              
+
+    #Trigger request message : Param is 0x00, 0x10
+    #flicklib.i2c_write( [0x0C, 0x00, 0x00, 0x06, 0xA2, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00 ] ) 
+
+    #Response:
+    """Data is : bytearray(b'\x10\x00\x04\xa2\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+    Size is : 0x10
+    Flags is : 0x0
+    Sequence is : 0x4
+    ID is : 0xa2
+    Param ID is : 0x0
+    Max Command size is : 0x10
+    Error byte 0 is : 0x0
+    Error byte 1 is : 0x0
+    Argument 0 is : bytearray(b'\x00\x00\x00\x00')
+    Argument 1 is : bytearray(b'\x00\x00\x00\x00')
+    """
+
+    #Gesture HMM settings request message : Param is 0x85
+    #flicklib.i2c_write( [0x0C, 0x00, 0x00, 0x06, 0xA2, 0x00, 0x00, 0x00, 0x85, 0x00, 0x00, 0x00 ])
+  
+    #Response:
+    """Data is : bytearray(b'\x10\x00\x04\xa2\x85\x00\x00\x00\x1f\x00\x80\x00\xff\xff\xff\xff')
+    Size is : 0x10
+    Flags is : 0x0
+    Sequence is : 0x4
+    ID is : 0xa2
+    Param ID is : 0x85
+    Max Command size is : 0x0
+    Error byte 0 is : 0x0
+    Error byte 1 is : 0x0
+    Argument 0 is : bytearray(b'\x1f\x00\x80\x00')
+    Argument 1 is : bytearray(b'\xff\xff\xff\xff')"""
+
+
+    #Calibration operation mode : Param 0x80    
+    #flicklib.i2c_write( [0x0C, 0x00, 0x00, 0x06, 0xA2, 0x00, 0x00, 0x00,    0x80, 0x00, 0x00, 0x00 ]) 
+    
+    #Response:
+    """Data is : bytearray(b'\x10\x00\x04\xa2\x80\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff')
+    Size is : 0x10
+    Flags is : 0x0
+    Sequence is : 0x4
+    ID is : 0xa2
+    Param ID is : 0x80
+    Max Command size is : 0x0
+    Error byte 0 is : 0x0
+    Error byte 1 is : 0x0
+    Argument 0 is : bytearray(b'\x00\x00\x00\x00')
+    Argument 1 is : bytearray(b'\xff\xff\xff\xff')"""
+
+    #Experiments 0x01 to 0x0A returned error codes
+    #flicklib.i2c_write( [0x0C, 0x00, 0x00, 0x06, 0xA2, 0x00, 0x00, 0x00,    0x0A, 0x00, 0x00, 0x00 ]) 
+
+
+    handle_response16(flicklib._read_msg(16))
+
+    exit()
+
+
+def handle_response12(data):
+
+    #Handle 12 byte response
+
+    print("Data is : "+str(data))
+    #check if we have an error loaded in byte 7
+    flicklib._handle_status_info(data) 
+    d_size  = data.pop(0)
+    if d_size == 0:
+            print("No return message")
+    else:
+        
+        print("Size is : "+str(hex(d_size)))
+        d_flags = data.pop(0)
+        print("Flags is : "+str(hex(d_flags)))
+        d_seq   = data.pop(0)
+        print("Sequence is : "+str(hex(d_seq)))
+        d_ident = data.pop(0)
+        print("ID is : "+str(hex(d_ident)))
+        d_param = data.pop(0)
+        print("Param ID is : "+str(hex(d_param)))
+        d_cmd_size =  data.pop(0)
+        print("Max Command size is : "+str(hex(d_cmd_size)))
+        d_err0 =  data.pop(0)
+        print("Error byte 0 is : "+str(hex(d_err0)))
+        d_err1 =  data.pop(0)
+        print("Error byte 1 is : "+str(hex(d_err1)))
+   
+    exit()
+
+
+
 
 #Main function-----------------------------------------------------------------------------------------------------------------------
 
@@ -653,6 +862,7 @@ async def main():
     global run_t
     global exec_t
     global exec_a
+    global permit_recalibrate
 
     global o_result
     global video_active
@@ -665,10 +875,14 @@ async def main():
     global c_time
 
     global z_in
+    global x_in
+    global y_in
     
     global detection
     global flick_interval
     global local_time
+
+    global garbage_count
  
     init_t=time.time()
     exec_t=time.time()
@@ -676,17 +890,34 @@ async def main():
     
     result=1
     
+
+    #Test code start-----------------------------------------------------------
+    #Test code will end the script
+
+    #send16()
+
+    #send12()
+    
+    #Test code end------------------------------------------------------------
+    
+     
     # Create a lock
     execute_lock = asyncio.Lock()
 
     video_active =  is_screen_video()
-    video_playing =  is_video_playing(video_active) 
+    video_playing =  is_video_playing(video_active)
+ 
     flicklib.recalibrate() 
     
     # Update data window continuously until Control-C
     while True:
 
         o_result=0
+        
+        if len(f_queue)>0:
+             f_result,f_time=f_queue.popleft()
+             while f_queue:
+                 f_queue.popleft()
 
         if not a_result:
           if not f_result:
@@ -735,18 +966,24 @@ async def main():
 
         if result and time.time()-exec_t>flick_interval and cycle_result==0:
               await ready_beep_()
+              #Green light ready to recognize
+              act_led("1")
+              pwr_led("0")
               result=0  
 
-        
+        local_time = datetime.now(tz)
         if cycle_result>0:
+             
              c_command=detection.get(cycle_result, "Invalid input")
-             local_time = datetime.now(tz)
-             #print(f"{cycle_result:<5}"+" : "f"{c_command:<15}"+" -> "+str(local_time)) 
+             
              logging.info(f"{cycle_result:<5}"+" : "f"{c_command:<15}"+" Received at ->       "+str(local_time))
 
              #Only beep if detection is not airwheel
              if cycle_result<30:
                 await ack_beep_() 
+                #Red light, processing flick result, no gestures allowed
+                act_led("0")
+                pwr_led("1")
                 if time.time()-exec_t<flick_interval:
                    cycle_result=0                            # Setup for calibration instead  
                    logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> Dropped Ignored, too early ')
@@ -765,7 +1002,6 @@ async def main():
                 
                    
              #No beeps necessary if airwheel is detected   
-             #if cycle_result>30  and time.time()>exec_a:
              if cycle_result>30:    
                    exec_a=time.time()
                    result=await execute_(cycle_result)
@@ -773,12 +1009,14 @@ async def main():
                        c_queue.append((cycle_result,exec_a)) 
                        
         
-        #Garbage flick was detected    
+        #Garbage flick was detected, hand might be over board, shouldn't recalibrate in this case    
         if cycle_result<0:
-             #print(f"{cycle_result:<20}") 
-             logging.info(f"{cycle_result:<5}"+" : "f"{c_command:<15}"+" Received at ->       "+str(local_time))
-             m_command="backspace"     #choose a benign kodi command to wake up the screen  
-             await kodi_request_("Input.ExecuteAction", {"action": m_command })      #asynchronous version
+             g_command="garbage"
+             logging.info(f"{cycle_result:<5}"+" : "f"{g_command:<15}"+str(garbage_count)+"/"+str(max_garbage)+" Received ->       "+str(local_time))
+             m_command="backspace"     #choose a benign kodi command to wake up the screen
+             if not video_playing:  
+                await kodi_request_("Input.ExecuteAction", {"action": m_command })      #asynchronous version
+                logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> Awoken. ')  
 
         #No detection in this cycle, detect if video is playing, so don't have to detect in execute(command)
         if cycle_result == 0:
@@ -790,6 +1028,7 @@ async def main():
                  if time.time()-c_time>30 and c_code==2:
                      logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 3 : Shutting Down ')  
                      await speak_command_("shuttingdown")
+                     await kodi_request_("Input.ExecuteAction", {"action": "stop" })
                      os.system("sudo shutdown -h now")
                      
              else:
@@ -799,11 +1038,24 @@ async def main():
                      c_time=0 
                      c_code=0
              run_t=time.time()
+             #if run_t-init_t>60:
              #Recalibrate every 60 seconds 
-             if run_t-init_t>60:    
-                   flicklib.recalibrate()
-                   init_t=time.time()
-         
+             if (run_t-init_t>recalibration_interval or garbage_count>=max_garbage) and permit_recalibrate:
+                   if (x_in=='' or y_in=='' or z_in==''):
+                        #Red light, recalibrate, no gestures allowed
+                        act_led("0")
+                        pwr_led("1")      
+                        if garbage_count>=max_garbage:
+                            warn_beep()    #Warn user with long beep -  hands off the board!
+                        flicklib.recalibrate()
+                        garbage_count=0
+                        logging.info('  >>>>>>>>>>>>>>>>>>>>>>>>>>>>> Recalibrated. <<<<<<<<<<<<<<<<<<<<<<<<<<<<< ')  
+                        init_t=time.time()
+                        act_led("1")
+                        pwr_led("0")     
+             x_in=''
+             y_in=''
+             z_in=''
         
              
         cycle_result=0
@@ -817,6 +1069,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
 
 
