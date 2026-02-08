@@ -698,17 +698,41 @@ def send16():
     #Set runtime parameter request code
     #Test code is 16 bytes, returns 16 bytes
 
-    flicklib._stop_poll()       #[ set runtime param    ][Runtime param ID  ][ Reserved     ][  Argument 0            ][     Argument 1         ]
+    #flicklib._stop_poll()       #[ set runtime param    ][Runtime param ID  ][ Reserved     ][  Argument 0            ][     Argument 1         ]
                        #[size=x10=16   ID=0xa2 ][ x1000 or LE 0010 ][ for response ]        
                        #  0      1    2      3       4    5             6     7        8     9     10    11      12    13    14     15         
 
     #Trigger recalibration OK
     #flicklib.i2c_write( [0x10, 0x00, 0x00, 0xa2,   0x00, 0x10,        0x00, 0x00,     0x00, 0x00, 0x00, 0x00,   0x00, 0x00, 0x00, 0x00])
     
+    """Data is : bytearray(b'\x10\x00\x04\x15\xa24\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+    Size is : 0x10
+    Flags is : 0x0
+    Sequence is : 0x4
+    ID is : 0x15
+    Param ID is : 0xa2
+    Max Command size is : 0x34
+    Error byte 0 is : 0x0
+    Error byte 1 is : 0x0
+    Argument 0 is : bytearray(b'\x00\x00\x00\x00')
+    Argument 1 is : bytearray(b'\x00\x00\x00\x00')
+    """
 
     #set gestures OK
     #flicklib.i2c_write([0x10, 0x00, 0x00, 0xA2, 0x85, 0x00, 0x00 ,0x00, 0x1F, 0x00, 0x80, 0x00, 0xFF, 0xFF, 0xFF, 0xFF])
 
+    """Data is : bytearray(b'\x10\x00\x04\x15\xa24\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+    Size is : 0x10
+    Flags is : 0x0
+    Sequence is : 0x4
+    ID is : 0x15
+    Param ID is : 0xa2
+    Max Command size is : 0x34
+    Error byte 0 is : 0x0
+    Error byte 1 is : 0x0
+    Argument 0 is : bytearray(b'\x00\x00\x00\x00')
+    Argument 1 is : bytearray(b'\x00\x00\x00\x00')
+    """
 
     handle_response16(flicklib._read_msg(16))
 
@@ -885,8 +909,8 @@ async def main():
     global garbage_count
  
     init_t=time.time()
-    exec_t=time.time()
-    exec_a=time.time()
+    exec_t=0
+    exec_a=0
     
     result=1
     
@@ -964,7 +988,7 @@ async def main():
         cycle_result=o_result
         o_result=''
 
-        if result and time.time()-exec_t>flick_interval and cycle_result==0:
+        if result and time.time()-exec_t>flick_interval and cycle_result<=0:
               await ready_beep_()
               #Green light ready to recognize
               act_led("1")
@@ -979,7 +1003,7 @@ async def main():
              logging.info(f"{cycle_result:<5}"+" : "f"{c_command:<15}"+" Received at ->       "+str(local_time))
 
              #Only beep if detection is not airwheel
-             if cycle_result<30:
+             if cycle_result<30 and cycle_result>0:
                 await ack_beep_() 
                 #Red light, processing flick result, no gestures allowed
                 act_led("0")
@@ -1043,16 +1067,16 @@ async def main():
              if (run_t-init_t>recalibration_interval or garbage_count>=max_garbage) and permit_recalibrate:
                    if (x_in=='' or y_in=='' or z_in==''):
                         #Red light, recalibrate, no gestures allowed
-                        act_led("0")
-                        pwr_led("1")      
+                        #act_led("0")
+                        #pwr_led("1")      
                         if garbage_count>=max_garbage:
                             warn_beep()    #Warn user with long beep -  hands off the board!
                         flicklib.recalibrate()
                         garbage_count=0
                         logging.info('  >>>>>>>>>>>>>>>>>>>>>>>>>>>>> Recalibrated. <<<<<<<<<<<<<<<<<<<<<<<<<<<<< ')  
                         init_t=time.time()
-                        act_led("1")
-                        pwr_led("0")     
+                        #act_led("1")
+                        #pwr_led("0")     
              x_in=''
              y_in=''
              z_in=''
