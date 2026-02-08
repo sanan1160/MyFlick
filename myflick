@@ -92,7 +92,8 @@ f_queue = deque()
 c_code=0
 #shutdown timer
 c_time=time.time()
-
+#reinit
+reinitialize=True
 
 #Airwheel results
 A_Left  = 31
@@ -369,6 +370,8 @@ async def execute_(command):
 async def decode(seq):
    global c_code
    global c_time
+   global reinitialize
+   reinitialize=False
    L_counter=0
    R_counter=0
    
@@ -400,11 +403,13 @@ async def decode(seq):
       if L_counter>=10:   
          c_code=1
          c_time=time.time()
+         reinitialize=False
          logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 1 :  '+str(L_counter)+" Left Airwheel revolutions")  
          speak_command("warning")     
          
       if c_code==1 and R_counter>=10:
          c_code=2
+         reinitialize=True
          c_time=time.time()
          logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 2 :  '+str(R_counter)+" Right Airwheel revolutions")
          logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 2 :  Shutdown in 30 seconds unless video playback resumes')
@@ -412,6 +417,7 @@ async def decode(seq):
          
    else:
       if time.time()-c_time>40 and c_code==1:
+         reinitialize=False
          logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 0 : Timer for Stage 2 expired ')  
          c_code=0
       
@@ -894,6 +900,7 @@ async def main():
     global exec_t
     global exec_a
     global permit_recalibrate
+    global reinitialize
 
     global o_result
     global video_active
@@ -1057,18 +1064,29 @@ async def main():
              #Process the c_queue for shutdown sequence
              if not video_playing:
                  await decode(c_queue)
-                 if time.time()-c_time>30 and c_code==2:
+                 if time.time()-c_time>30 and c_code==2:                            #Video paused and timer countdown elapsed, shut down
                      logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 3 : Shutting Down ')  
-                     await speak_command_("shuttingdown")
                      await kodi_request_("Input.ExecuteAction", {"action": "stop" })
+                     await speak_command_("shuttingdown")
                      os.system("sudo shutdown -h now")
+ 
+                 if time.time()-c_time<30 and c_code==2:                            #Video paused and timer has not elapsed yet, do a board reset instead
+                     if reinitialize:
+                         flicklib.reinit()
+                         flicklib.recalibrate()
+                         reinitialize=False
+
+                         await speak_command_("boardreset") 
+                         logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 0 :  Board Reset performed ')
                      
              else:
                  if time.time()-c_time<30 and c_code==2:
-                     logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 0 : Shutdown Aborted by User ')  
+                     logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 0 : Shutdown Aborted by User ')
                      await speak_command_("cancelshutdown")
+                     
                      c_time=0 
                      c_code=0
+
              run_t=time.time()
              #if run_t-init_t>60:
              #Recalibrate every 60 seconds 

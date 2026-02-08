@@ -26,12 +26,13 @@ Flicklib patch includes the following changes:
    3. When hold is detected after 3 seconds, presence is detected after the next second. This results in two consecutive recognitions. So i disabled hold in order to use presence. However, the detection from the board returns a hold instead        of a presence.
    4. The flick-demo has to be adjusted to account for three arguments to @flicklib.flick()
       def flick(i_type,start,finish):
-   5. No point in testing the sequence byte to remove duplicates. It resulted in less accurate flick recognitions.
+   
 
 2. Enabled auto calibration.  The original flicklib had auto calibration disabled, resulting in ghost gesture detections.
 3. Added recalibrate method. In my testing, a recalibration every minute seemed optimal. But I have my flick board in front of the TV set where the EM field might be continually changing.
 4. I ran into seemingly random GPIO busy errors so I modifed flicklib to swallow the errors in _read_msg(len=132) and  def i2c_read(len).
 5. The default configuration for the patched flicklib only enables: Flick: garbage, presence(returned as hold), flick east-west, flick west-east, flick north-south, flick south-north, airwheel CW, airwheel CCW.
+6. Wrapped the init sequence into an init() procedure and created a reinit() procedure.
 
 MyFlick - Gesture control for Kodi 
 
@@ -40,7 +41,7 @@ MyFlick - Gesture control for Kodi
 3. By evaluating the value of Z, you can further qualify hold as hover high or hover low, allowing two assignable actions.
 4. Its best to presynthesize the speech files into wav files to cut down on cpu processing
 5. The garbage model is only useful for waking up the screen as it will occur whenever there is electromagnetic noise on top of the board so I assigned it to pressing Backspace as I don't know of any more direct way of turning off the screensaver on an as needed basis.
-6. A recalibration every 60 seconds seems optimal in my setup with a max_garbage=4. User can force a recalibration by instantiating garbage detections to a set limit (twiddle your fingers on top of the board a few times).  A long beep is played to warn to remove hand from top of board before recalibration triggered by garbage count.  The garbage count will be cleared at each recalibration (interval or garbage count triggered)  so hopefully the long beep only will serve for user intended recalibrations if interval recalibrations occur frequently enough.  If the garbage count increases to max_garbage, a silent (no longbeep) recalibration will be triggered.   
+6. A recalibration every 60 seconds seems optimal in my setup with a max_garbage=4. User can force a recalibration by instantiating garbage detections to a set limit (twiddle your fingers on top of the board a few times).  A long beep is played to warn to remove hand from top of board before recalibration triggered by garbage count.  The garbage count will be cleared at each recalibration (interval or garbage count triggered)  so hopefully the long beep only will serve for user intended recalibrations if interval recalibrations occur frequently enough.  If the garbage count increases to max_garbage due to environmental EM noise, a silent (no longbeep) recalibration will be triggered.   
 7. Onboard LEDS ACT and PWR are used as visual cues.  ACT (Green LED) signals readiness for detection. PWR (Red LED) signals WAIT ( execute() running, recalibration in process, still within the imposed flick interval). This is unfortunately board specific and my settings are for RPI 3B+.
 8. Process priority is adjusted by the script, requiring root privileges. Therefore, a systemd service script is included to start myflick. 
 9. Flick gestures are limited to 1 per flick_interval (1 second) and expired after flick_expire (3 seconds). Execute() will only execute the last flick detection and throw away the earlier ones to avoid queueing. Airwheel has no interval limit but in the general UI, it will be interrupted by speech playback so page up and page down will execute one step at a time. 
@@ -49,9 +50,17 @@ MyFlick - Gesture control for Kodi
 
 Tips:
 
-1. If gesture recognition is inaccurate, force a recalibration by increasing garbage_count to max_garbage. Do this by putting the video in pause mode (to mute the video volume) and then twiddling your fingers over the board up to max_garbage times. A softbeep will signal recognition of each garbage gesture, followed by a longbeep if you hit max_garbage.  Hands off the board before the longbeep ends.  Pick a softbeep that is barely audible as garbage detection could happen with extraneous EM noise over the board.  
-2. One of the possible causes of inacurrate recogniton is silent recalibration at intervals with the hand over the board. 
+1. Gesture recognition is inaccurate:
 
+   Force a recalibration by increasing garbage_count to max_garbage. Do this by putting the video in pause mode (to mute the video volume) and then twiddling your fingers over the board up to max_garbage times. A softbeep will signal recognition of each garbage gesture, followed by a longbeep if you hit max_garbage.  Hands off the board before the longbeep ends.  Pick a softbeep that is barely audible as garbage detection could happen with extraneous EM noise over the board. One of the possible causes of inacurrate recogniton is silent recalibration at intervals with the hand over the board. 
+
+2. Gesture recognition is delayed:
+   It might be necessary to reinitialize the board. Go through the shutdown process (Pause the video. Perform Left Airwheel 10 times followed by Right Airwheel 10 times).  The board will be reinitialized.  Then cancel the shutdown by unpausing the video.  
+
+Hardware and Library Notes:
+
+1. No point in testing the sequence byte in the response message to remove duplicates. It resulted in less accurate flick recognitions.
+2. With prolonged uptime, the Flick board is displaying increasing latency between flick detection (when hand swipe ocurred)  and sending the library message response back. Seems fixed by reinitializing the board. 
 
 My RPI is upside down with the HDMI port facing the TV so the compass directions are reversed. 
 
@@ -69,11 +78,12 @@ Kodi Actions Implemented while video is playing:
 
 Kodi actions implemted while video is paused:
 
-1. West - Enable/Disable video timebar and clock
-2. East - Enable/Disable subtitles
-3. North - Stop Video, Move Down 1 line in the directory, Select video -> Play the next video in the directory
-4. South - Stop video
-5. 10 Left Airwheel (Stage 1 shutdown) and within 40 seconds followed by 10 Right Airwheel (Stage 2 shutdown) -> Shutdown in 30 seconds. Cancel shutdown by resuming playback. If 10 Right airwheel did not occur within 40 seconds after 10 Left Airwheel, then the Shutdown sequence is cleared (Stage 0).  
+1. Enable/Disable video timebar and clock - Flick West
+2. Enable/Disable subtitles - Flick East
+3. Play the Next Video in the Directory - Flick North
+4. Exit/Stop video - Flick South
+5. Shutdown the Raspberry Pi -  10 Left Airwheel (Stage 1 shutdown) and within 40 seconds followed by 10 Right Airwheel (Stage 2 shutdown). Shutdown will occur in 30 seconds. Cancel shutdown by resuming playback. If 10 Right airwheel did not occur within 40 seconds after 10 Left Airwheel, then the Shutdown sequence is cleared (Stage 0).  
+6. Reset the Flick Board - Go through the Shutdown sequence, Wait for the board to initialize,  and unpause the video to Abort Shutdown. 
 
 Kodi actions implemented in the general UI:
 

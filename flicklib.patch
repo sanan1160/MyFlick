@@ -1,6 +1,17 @@
 --- flicklib.py	2026-01-24 10:28:27.196208659 -0500
-+++ flicklib_update.py	2026-02-07 20:57:58.569832329 -0500
-@@ -76,8 +76,12 @@
++++ flicklib_update.py	2026-02-08 18:15:01.985406375 -0500
+@@ -39,10 +39,6 @@
+ 
+ i2cm = i2c.I2CMaster(i2c_bus)
+ 
+-GPIO.setmode(GPIO.BCM)
+-GPIO.setwarnings(False)
+-GPIO.setup(SW_RESET_PIN, GPIO.OUT, initial=GPIO.HIGH)
+-GPIO.setup(SW_XFER_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+ 
+ x = 0.0
+ y = 0.0
+@@ -76,8 +72,12 @@
      i2cm.transaction(i2c.writing_bytes(SW_ADDR, *data))
  
  def i2c_read(len):
@@ -15,10 +26,94 @@
  
  def millis():
      return int(round(time.time() * 1000))
-@@ -88,6 +92,11 @@
+@@ -88,6 +88,95 @@
      GPIO.output(SW_RESET_PIN, GPIO.HIGH)
      time.sleep(0.04) # Datasheet delay of 200ms plus change
  
++def setup():
++    GPIO.setmode(GPIO.BCM)
++    GPIO.setwarnings(False)
++    GPIO.setup(SW_RESET_PIN, GPIO.OUT, initial=GPIO.HIGH)
++    GPIO.setup(SW_XFER_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
++
++
++def reinit():
++    
++    _stop_poll()
++
++    _exit()
++
++    setup()
++
++    reset()
++
++    init()
++
++def init():
++    
++
++    # MGC313 sends firmware version immediately after reset
++    data = _read_msg(132)
++    d_size  = data.pop(0)
++    d_flags = data.pop(0)
++    d_seq   = data.pop(0)
++    d_ident = data.pop(0)
++    if (d_ident != 0x83):
++        print('Did not receive firmware info')
++        exit()
++    _handle_firmware_info(data)
++
++    time.sleep(0.2) # MGC3130 starts processing 200 msec after reset
++
++# Lock data output for:
++# Bit 0: DSP Status
++# Bit 1: Gesture Data
++# Bit 2: TouchInfo
++# Bit 3: AirWheelInfo
++# Bit 4: xyzPosition
++    i2c_write([0x10, 0x00, 0x00, 0xa2, 0xa1, 0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff])
++    time.sleep(0.1)
++
++# Enable auto-calibration for:
++# Bit 1: gesture-triggered
++# Bit 2: negative
++# Bit 3: idle
++# Bit 4: invalid values, if values completely out of range
++# Bit 5: triggered by AFA (Automati Frequency Adjustment)
++    i2c_write([0x10, 0x00, 0x00, 0xa2, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00])
++    time.sleep(0.1)
++
++
++
++#7  6  5  4  3  2  1  0     byte[0]
++#15 14 13 12 11 10 9  8     byte[1]
++#23 22 21 20 19 18 17 16    byte[2]
++#31 30 29 28 27 26 25 24    byte[3]
++
++#Enable flick, edge, hold, presence                        
++#                                                         [ 1F    00    C0    0F  ]
++#i2c_write([0x10, 0x00, 0x00, 0xA2, 0x85, 0x00, 0x00 ,0x00, 0x1F, 0x00, 0xC0, 0x0F, 0xFF, 0xFF, 0xFF, 0xFF])
++
++#Enable flick, presence
++#                                                         [ 1F    00    80    00  ] 
++    i2c_write([0x10, 0x00, 0x00, 0xA2, 0x85, 0x00, 0x00 ,0x00, 0x1F, 0x00, 0x80, 0x00, 0xFF, 0xFF, 0xFF, 0xFF])
++
++
++#Enable flick, hold, presence
++#                                                         [ 1F    00    C0    00  ] 
++    #i2c_write([0x10, 0x00, 0x00, 0xA2, 0x85, 0x00, 0x00 ,0x00, 0x1F, 0x00, 0xC0, 0x00, 0xFF, 0xFF, 0xFF, 0xFF])
++
++#Enable only flick
++#                                                         [ 1F    00    00    00  ] 
++#i2c_write([0x10, 0x00, 0x00, 0xA2, 0x85, 0x00, 0x00 ,0x00, 0x1F, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF])
++
++    time.sleep(0.1)
++
++
++# Start read output data thread
++    _start_poll()
++
++
 +def recalibrate():
 +           #force recalibrate [ Header                ][ Parameter ID ][ Reserved  ][   Argument 0         ][    Argument 1          ]      
 +           i2c_write( [0x10, 0x00, 0x00, 0xa2,   0x00, 0x10,   0x00, 0x00,  0x00, 0x00, 0x00, 0x00,   0x00, 0x00, 0x00, 0x00])
@@ -27,7 +122,7 @@
  class StoppableThread(threading.Thread):
      '''Basic stoppable thread wrapper
  
-@@ -155,25 +164,47 @@
+@@ -155,25 +244,47 @@
          if callable(_on_move):
              _on_move(x, y, z)
  
@@ -89,7 +184,7 @@
  
      if d_configmask & SW_DATA_TOUCH and not (d_touch[0] == 0 and d_touch[1] == 0):
          # We have a touch
-@@ -262,6 +293,9 @@
+@@ -262,6 +373,9 @@
  
  def _handle_status_info(data):
      error = data[7] << 8 | data[6]
@@ -99,7 +194,7 @@
  
  def _handle_firmware_info(data):
      global fw_info
-@@ -296,16 +330,12 @@
+@@ -296,16 +410,12 @@
              data = i2c_read(len)
              io_error_count = 0
              return bytearray(data)
@@ -119,39 +214,44 @@
      data = _read_msg(26)
  
      d_size  = data.pop(0)
-@@ -502,7 +532,34 @@
- # Bit 3: idle
- # Bit 4: invalid values, if values completely out of range
- # Bit 5: triggered by AFA (Automati Frequency Adjustment)
--i2c_write([0x10, 0x00, 0x00, 0xa2, 0x80, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00])
-+i2c_write([0x10, 0x00, 0x00, 0xa2, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00])
-+time.sleep(0.1)
-+
-+
-+
-+#7  6  5  4  3  2  1  0     byte[0]
-+#15 14 13 12 11 10 9  8     byte[1]
-+#23 22 21 20 19 18 17 16    byte[2]
-+#31 30 29 28 27 26 25 24    byte[3]
-+
-+#Enable flick, edge, hold, presence                        
-+#                                                         [ 1F    00    C0    0F  ]
-+#i2c_write([0x10, 0x00, 0x00, 0xA2, 0x85, 0x00, 0x00 ,0x00, 0x1F, 0x00, 0xC0, 0x0F, 0xFF, 0xFF, 0xFF, 0xFF])
-+
-+#Enable flick, presence
-+#                                                         [ 1F    00    80    00  ] 
-+i2c_write([0x10, 0x00, 0x00, 0xA2, 0x85, 0x00, 0x00 ,0x00, 0x1F, 0x00, 0x80, 0x00, 0xFF, 0xFF, 0xFF, 0xFF])
-+
-+#Enable flick, hold, presence
-+#                                                         [ 1F    00    C0    00  ] 
-+#i2c_write([0x10, 0x00, 0x00, 0xA2, 0x85, 0x00, 0x00 ,0x00, 0x1F, 0x00, 0xC0, 0x00, 0xFF, 0xFF, 0xFF, 0xFF])
-+
-+#Enable only flick
-+#                                                         [ 1F    00    00    00  ] 
-+#i2c_write([0x10, 0x00, 0x00, 0xA2, 0x85, 0x00, 0x00 ,0x00, 0x1F, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF])
-+
-+time.sleep(0.1)
-+
+@@ -472,37 +582,10 @@
  
- # Start read output data thread
- _start_poll()
+ atexit.register(_exit)
+ 
+-reset()
++setup()
+ 
+-# MGC313 sends firmware version immediately after reset
+-data = _read_msg(132)
+-d_size  = data.pop(0)
+-d_flags = data.pop(0)
+-d_seq   = data.pop(0)
+-d_ident = data.pop(0)
+-if (d_ident != 0x83):
+-    print('Did not receive firmware info')
+-    exit()
+-_handle_firmware_info(data)
++reset()
+ 
+-time.sleep(0.2) # MGC3130 starts processing 200 msec after reset
++init()
+ 
+-# Lock data output for:
+-# Bit 0: DSP Status
+-# Bit 1: Gesture Data
+-# Bit 2: TouchInfo
+-# Bit 3: AirWheelInfo
+-# Bit 4: xyzPosition
+-i2c_write([0x10, 0x00, 0x00, 0xa2, 0xa1, 0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff])
+-time.sleep(0.1)
+ 
+-# Enable auto-calibration for:
+-# Bit 1: gesture-triggered
+-# Bit 2: negative
+-# Bit 3: idle
+-# Bit 4: invalid values, if values completely out of range
+-# Bit 5: triggered by AFA (Automati Frequency Adjustment)
+-i2c_write([0x10, 0x00, 0x00, 0xa2, 0x80, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00])
+-
+-# Start read output data thread
+-_start_poll()
