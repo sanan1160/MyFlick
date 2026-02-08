@@ -224,6 +224,14 @@ async def video_seek_(player_id,seek_t):
 
     return 0 
 
+async def soft_beep_():
+       result = subprocess.run(
+        #mpg321 cannot decode beep.wav correctly 
+        ["aplay","-q", "/home/pi/bin/audio/softbeep.wav" ],          # Command and arguments as a list
+        capture_output=True,                                           # Capture the standard output
+        text=True,                                                     # Decode output as text (universal_newlines=True in older versions)
+        check=False                                                    # Raise an exception if the command fails
+    )
 
 async def ack_beep_():
     result = subprocess.run(
@@ -286,9 +294,8 @@ async def execute_(command):
          v_command=action_video.get(command, "Invalid input")
 
          if command<30:
-            
+            local_time = datetime.now(tz)
             if time.time()-f_time>flick_expire:
-                 local_time = datetime.now(tz)
                  local_f_time = datetime.fromtimestamp(f_time)
                  logging.info("  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> Dropped Delayed : "+str(local_f_time)+" Now: "+str(local_time))
                  return 1
@@ -1036,6 +1043,7 @@ async def main():
         #Garbage flick was detected, hand might be over board, shouldn't recalibrate in this case    
         if cycle_result<0:
              g_command="garbage"
+             await soft_beep_()
              logging.info(f"{cycle_result:<5}"+" : "f"{g_command:<15}"+str(garbage_count)+"/"+str(max_garbage)+" Received ->       "+str(local_time))
              m_command="backspace"     #choose a benign kodi command to wake up the screen
              if not video_playing:  

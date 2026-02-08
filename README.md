@@ -36,16 +36,21 @@ Flicklib patch includes the following changes:
 MyFlick - Gesture control for Kodi 
 
 1. Due to the ability of setting the state of video playback to pause or play, combinations are now possible where you use hold to pause/play and use this as a condition for another action: For example, hold to pause, then flick north can be assigned to a different action or action combo based on wether playback is in pause or play.
-2. A ack_beep or acknowledge beep lets me know if a gesture is recognized which is mostly important for hold gesture. A ready_beep informs me that the script is ready for another recognition. The ack_beep does not guarantee execute of the gesture.
+2. A ack_beep or acknowledge beep lets me know if a gesture is recognized which is mostly important for hold gesture. A ready_beep informs me that the script is ready for another recognition. The ack_beep does not guarantee execute of the gesture as the gesture may have been detected too far in the past.
 3. By evaluating the value of Z, you can further qualify hold as hover high or hover low, allowing two assignable actions.
 4. Its best to presynthesize the speech files into wav files to cut down on cpu processing
 5. The garbage model is only useful for waking up the screen as it will occur whenever there is electromagnetic noise on top of the board so I assigned it to pressing Backspace as I don't know of any more direct way of turning off the screensaver on an as needed basis.
-6. A recalibration every 60 seconds seems optimal in my setup. User can force a recalibration by instantiating garbage detections to a set limit (twiddle your fingers on top of the board a few times).  A long beep is played to warn to remove hand from top of board before recalibration triggered by garbage count.  The garbage count will be cleared at each recalibration (interval or garbage count triggered)  so hopefully the long beep only will serve for user intended recalibrations if interval recalibrations occur frequently enough.   
+6. A recalibration every 60 seconds seems optimal in my setup with a max_garbage=4. User can force a recalibration by instantiating garbage detections to a set limit (twiddle your fingers on top of the board a few times).  A long beep is played to warn to remove hand from top of board before recalibration triggered by garbage count.  The garbage count will be cleared at each recalibration (interval or garbage count triggered)  so hopefully the long beep only will serve for user intended recalibrations if interval recalibrations occur frequently enough.  If the garbage count increases to max_garbage, a silent (no longbeep) recalibration will be triggered.   
 7. Onboard LEDS ACT and PWR are used as visual cues.  ACT (Green LED) signals readiness for detection. PWR (Red LED) signals WAIT ( execute() running, recalibration in process, still within the imposed flick interval). This is unfortunately board specific and my settings are for RPI 3B+.
 8. Process priority is adjusted by the script, requiring root privileges. Therefore, a systemd service script is included to start myflick. 
 9. Flick gestures are limited to 1 per flick_interval (1 second) and expired after flick_expire (3 seconds). Execute() will only execute the last flick detection and throw away the earlier ones to avoid queueing. Airwheel has no interval limit but in the general UI, it will be interrupted by speech playback so page up and page down will execute one step at a time. 
 10. There is code for sending 12 byte and 16 byte Gestic Library Messages for anyone who wishes to experiment.
 11. A logging facility is included. Useful to watch the log with tail -f myflick.log
+
+Tips:
+
+1. If gesture recognition is inaccurate, force a recalibration by increasing garbage_count to max_garbage. Do this by putting the video in pause mode (to mute the video volume) and then twiddling your fingers over the board up to max_garbage times. A softbeep will signal recognition of each garbage gesture, followed by a longbeep if you hit max_garbage.  Hands off the board before the longbeep ends.  Pick a softbeep that is barely audible as garbage detection could happen with extraneous EM noise over the board.  
+2. One of the possible causes of inacurrate recogniton is silent recalibration at intervals with the hand over the board. 
 
 
 My RPI is upside down with the HDMI port facing the TV so the compass directions are reversed. 
