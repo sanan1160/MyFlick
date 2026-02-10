@@ -416,7 +416,7 @@ async def decode(seq):
          speak_command("shutdownin30seconds")
          
    else:
-      if time.time()-c_time>40 and c_code==1:
+      if time.time()-c_time>40 and c_code>=1:
          reinitialize=False
          logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 0 : Timer for Stage 2 expired ')  
          c_code=0
@@ -649,6 +649,9 @@ def flick(i_type,start,finish):
     #flicktxt = i_type +' : '+start + ' - ' + finish
 
     f_result=''
+
+    if z_in=='':
+       z_in=0
 
     if (i_type=='presence' or i_type=='hold') and (float(z_in) > 0.3):
             f_result='hover_high'
@@ -949,7 +952,6 @@ async def main():
     
     # Update data window continuously until Control-C
     while True:
-
         o_result=0
         
         if len(f_queue)>0:
@@ -1011,7 +1013,6 @@ async def main():
 
         local_time = datetime.now(tz)
         if cycle_result>0:
-             
              c_command=detection.get(cycle_result, "Invalid input")
              
              logging.info(f"{cycle_result:<5}"+" : "f"{c_command:<15}"+" Received at ->       "+str(local_time))
@@ -1064,23 +1065,24 @@ async def main():
              #Process the c_queue for shutdown sequence
              if not video_playing:
                  await decode(c_queue)
-                 if time.time()-c_time>30 and c_code==2:                            #Video paused and timer countdown elapsed, shut down
+                 if time.time()-c_time>30 and c_code==2 and video_active:           #Video paused and timer countdown elapsed, shut down
                      logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 3 : Shutting Down ')  
                      await kodi_request_("Input.ExecuteAction", {"action": "stop" })
                      await speak_command_("shuttingdown")
                      os.system("sudo shutdown -h now")
  
-                 if time.time()-c_time<30 and c_code==2:                            #Video paused and timer has not elapsed yet, do a board reset instead
+                 if time.time()-c_time<30 and c_code==2 and video_active:           #Video paused and timer has not elapsed yet, do a board reset instead
                      if reinitialize:
                          flicklib.reinit()
-                         flicklib.recalibrate()
+                         #warn_beep()
+                         #flicklib.recalibrate()
                          reinitialize=False
 
                          await speak_command_("boardreset") 
                          logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 0 :  Board Reset performed ')
                      
              else:
-                 if time.time()-c_time<30 and c_code==2:
+                 if time.time()-c_time<30 and c_code==2 or not video_active:
                      logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 0 : Shutdown Aborted by User ')
                      await speak_command_("cancelshutdown")
                      

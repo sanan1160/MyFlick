@@ -55,12 +55,13 @@ Tips:
    Force a recalibration by increasing garbage_count to max_garbage. Do this by putting the video in pause mode (to mute the video volume) and then twiddling your fingers over the board up to max_garbage times. A softbeep will signal recognition of each garbage gesture, followed by a longbeep if you hit max_garbage.  Hands off the board before the longbeep ends.  Pick a softbeep that is barely audible as garbage detection could happen with extraneous EM noise over the board. One of the possible causes of inacurrate recogniton is silent recalibration at intervals with the hand over the board. 
 
 2. Gesture recognition is delayed:
+
    It might be necessary to reinitialize the board. Go through the shutdown process (Pause the video. Perform Left Airwheel 10 times followed by Right Airwheel 10 times).  The board will be reinitialized.  Then cancel the shutdown by unpausing the video.  
 
 Hardware and Library Notes:
 
 1. No point in testing the sequence byte in the response message to remove duplicates. It resulted in less accurate flick recognitions.
-2. With prolonged uptime, the Flick board is displaying increasing latency between flick detection (when hand swipe ocurred)  and sending the library message response back. Seems fixed by reinitializing the board. 
+2. Sometimes, the Flick board is displaying increasing latency between flick detection (when hand swipe ocurred)  and sending the library message response back. Try reinitializing the board. 
 
 My RPI is upside down with the HDMI port facing the TV so the compass directions are reversed. 
 
