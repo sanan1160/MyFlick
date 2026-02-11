@@ -1,5 +1,5 @@
 --- flicklib.py	2026-01-24 10:28:27.196208659 -0500
-+++ flicklib_update.py	2026-02-10 18:31:52.466221684 -0500
++++ flicklib_update.py	2026-02-11 17:40:32.204284965 -0500
 @@ -39,10 +39,6 @@
  
  i2cm = i2c.I2CMaster(i2c_bus)
@@ -26,7 +26,7 @@
  
  def millis():
      return int(round(time.time() * 1000))
-@@ -88,6 +88,93 @@
+@@ -88,6 +88,94 @@
      GPIO.output(SW_RESET_PIN, GPIO.HIGH)
      time.sleep(0.04) # Datasheet delay of 200ms plus change
  
@@ -38,7 +38,7 @@
 +
 +
 +def reinit():
-+    
++
 +    _exit()
 +
 +    setup()
@@ -46,6 +46,7 @@
 +    reset()
 +
 +    init()
++
 +
 +def init():
 +    time.sleep(0.2)
@@ -120,7 +121,7 @@
  class StoppableThread(threading.Thread):
      '''Basic stoppable thread wrapper
  
-@@ -155,25 +242,47 @@
+@@ -155,25 +243,48 @@
          if callable(_on_move):
              _on_move(x, y, z)
  
@@ -135,6 +136,7 @@
 +        #is_present =  (d_gesture[3] & 0b00001000) > 0 # bit 27 check  Presence bit  
 +        #in_progress = (d_gesture[3] & 0b10000000) > 0 # bit 31 check to see if recognition is still ongoing
 +        #if in_progress:
++        #print("Flick occured on "+str(time.time()))
          gestures = [
 -            ('garbage','',''),
 -            ('flick','west','east'),
@@ -182,7 +184,7 @@
  
      if d_configmask & SW_DATA_TOUCH and not (d_touch[0] == 0 and d_touch[1] == 0):
          # We have a touch
-@@ -262,6 +371,9 @@
+@@ -262,6 +373,9 @@
  
  def _handle_status_info(data):
      error = data[7] << 8 | data[6]
@@ -192,7 +194,7 @@
  
  def _handle_firmware_info(data):
      global fw_info
-@@ -296,16 +408,12 @@
+@@ -296,16 +410,12 @@
              data = i2c_read(len)
              io_error_count = 0
              return bytearray(data)
@@ -212,12 +214,20 @@
      data = _read_msg(26)
  
      d_size  = data.pop(0)
-@@ -472,37 +580,10 @@
+@@ -466,43 +576,17 @@
+ 
+ def _exit():
+     _stop_poll()
++    time.sleep(0.5) #prevents lgpio unknown handle error on reinit() 
+     if GPIO != None:
+         GPIO.cleanup()
+ 
  
  atexit.register(_exit)
  
 -reset()
--
++setup()
+ 
 -# MGC313 sends firmware version immediately after reset
 -data = _read_msg(132)
 -d_size  = data.pop(0)
@@ -228,10 +238,10 @@
 -    print('Did not receive firmware info')
 -    exit()
 -_handle_firmware_info(data)
-+setup()
++reset()
  
 -time.sleep(0.2) # MGC3130 starts processing 200 msec after reset
-+reset()
++init()
  
 -# Lock data output for:
 -# Bit 0: DSP Status
@@ -241,7 +251,6 @@
 -# Bit 4: xyzPosition
 -i2c_write([0x10, 0x00, 0x00, 0xa2, 0xa1, 0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff])
 -time.sleep(0.1)
-+init()
  
 -# Enable auto-calibration for:
 -# Bit 1: gesture-triggered
@@ -250,6 +259,6 @@
 -# Bit 4: invalid values, if values completely out of range
 -# Bit 5: triggered by AFA (Automati Frequency Adjustment)
 -i2c_write([0x10, 0x00, 0x00, 0xa2, 0x80, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00])
- 
+-
 -# Start read output data thread
 -_start_poll()
