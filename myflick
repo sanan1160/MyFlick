@@ -3,6 +3,7 @@
 import subprocess
 import asyncio
 import aiohttp
+import aiofiles
 import json
 import requests
 import sys
@@ -44,7 +45,7 @@ flick_expire=3
 max_garbage=4
 
 #Recalibrate every N seconds
-recalibration_interval=60
+recalibration_interval=120
 
 #wether to use onboard LEDs for visual cue: RED -> don't do gestures ; GREEN -> open for gestures
 use_leds=True
@@ -147,6 +148,9 @@ video_active=0
 #video player is playing video or paused
 video_playing=False
 
+#Screensaver is active
+screensaver_active=False
+
 permit_recalibrate=True
 
 local_time=datetime.now(tz)
@@ -225,64 +229,127 @@ async def video_seek_(player_id,seek_t):
 
     return 0 
 
+
 async def soft_beep_():
-       result = subprocess.run(
-        #mpg321 cannot decode beep.wav correctly 
-        ["aplay","-q", "/home/pi/bin/audio/softbeep.wav" ],          # Command and arguments as a list
-        capture_output=True,                                           # Capture the standard output
-        text=True,                                                     # Decode output as text (universal_newlines=True in older versions)
-        check=False                                                    # Raise an exception if the command fails
+    filename = "/home/pi/bin/audio/softbeep.wav"
+    
+    proc = await asyncio.create_subprocess_exec(
+        'aplay', '-q', filename,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
     )
+
+    #print(f"Subprocess (mpg321) running with PID: {proc.pid}")
+
+    stdout, stderr = await proc.communicate()
+    
 
 async def ack_beep_():
-    result = subprocess.run(
-        #mpg321 cannot decode beep.wav correctly 
-        ["aplay","-q", "/home/pi/bin/audio/doublebeep.wav" ],          # Command and arguments as a list
-        capture_output=True,                                           # Capture the standard output
-        text=True,                                                     # Decode output as text (universal_newlines=True in older versions)
-        check=False                                                    # Raise an exception if the command fails
+    filename = "/home/pi/bin/audio/doublebeep.wav"
+    
+    proc = await asyncio.create_subprocess_exec(
+        'aplay', '-q', filename,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
     )
+
+    #print(f"Subprocess (mpg321) running with PID: {proc.pid}")
+
+    stdout, stderr = await proc.communicate()
+
 
 async def ready_beep_():
-    result = subprocess.run(
-        #mpg321 cannot decode beep.wav correctly
-        ["aplay","-q", "/home/pi/bin/audio/beep.wav" ],                # Command and arguments as a list
-        capture_output=True,                                           # Capture the standard output
-        text=True,                                                     # Decode output as text (universal_newlines=True in older versions)
-        check=False                                                    # Raise an exception if the command fails
+    filename = "/home/pi/bin/audio/beep.wav"
+    
+    proc = await asyncio.create_subprocess_exec(
+        'aplay', '-q', filename,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
     )
 
+    #print(f"Subprocess (mpg321) running with PID: {proc.pid}")
 
+    stdout, stderr = await proc.communicate()
+    
+    
+async def blink_leds_():
+    if not use_leds:
+       return
+    val=1
+    bcount=0
 
-async def synth_command_(text):
+    
+    while bcount <6:
 
-    if text=="":
-      return
+      if val == 1:
+          #print("Green")
+          async with aiofiles.open('/sys/class/leds/ACT/brightness', 'w') as f:
+              await f.write("1")
+          async with aiofiles.open('/sys/class/leds/PWR/brightness', 'w') as f:
+              await f.write("0")
+          val = await asyncio.sleep(0.2, result=2)
+          
 
-    res = gTTS(text=text, lang='en')
-    filename = "/tmp/output.mp3"
-    res.save(filename) 
+      if val == 2:
+          #print("Red")
+          async with aiofiles.open('/sys/class/leds/ACT/brightness', 'w') as f:
+              await f.write("0")
+          async with aiofiles.open('/sys/class/leds/PWR/brightness', 'w') as f:
+              await f.write("1")
+          val = await asyncio.sleep(0.2, result=1)
 
-    result = subprocess.run(
-        ["mpg321", "-q", "-o", "alsa", "-a", "hw:0,0", "/tmp/output.mp3" ],          # Command and arguments as a list
-        capture_output=True,                                                         # Capture the standard output
-        text=True,                                                                   # Decode output as text (universal_newlines=True in older versions)
-        check=False                                                                  # Raise an exception if the command fails
-    )
+      bcount+=1
+
+    await act_led_("1")  
+    await pwr_led_("0")   
+
+async def act_led_(l_state):
+    if not use_leds:
+       return
+    async with aiofiles.open('/sys/class/leds/ACT/brightness', mode='w') as f:
+            await f.write(l_state) 
+
+async def pwr_led_(l_state):
+    if not use_leds:
+       return
+    async with aiofiles.open('/sys/class/leds/PWR/brightness', mode='w') as f:
+            await f.write(l_state) 
+
+async def recalibrate_(): #recalibrate wrapped in an async function
+    #print("Recalibration started")
+    await asyncio.sleep(1)
+    flicklib.recalibrate()
+
+    #print("Recalibration finished")
 
 async def speak_command_(text):
     filename = "/home/pi/bin/audio/"+text+".wav"
-    result = subprocess.run(
-        ["mpg321", "-q", "-o", "alsa", "-a", "hw:0,0", filename ],          # Command and arguments as a list
-        capture_output=True,                                                # Capture the standard output
-        text=True,                                                          # Decode output as text (universal_newlines=True in older versions)
-        check=False                                                         # Raise an exception if the command fails
+    
+    proc = await asyncio.create_subprocess_exec(
+        #"mpg321", "-q", "-o", "alsa", "-a", "hw:0.0", filename,
+        "mpg321", "-q", filename,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
     )
+
+    #print(f"Subprocess (mpg321) running with PID: {proc.pid}")
+
+    stdout, stderr = await proc.communicate()
+    
+    #if proc.returncode == 0:
+    #    print(f"Finished playing: {filename}")
+    #else:
+    #    print(f"Error playing {filename}. Exit code: {proc.returncode}")
+    #    if stderr:
+    #        print(f"Error message: {stderr.decode().strip()}")
+
+
 
 
 async def execute_(command):
    global video_active
    global video_playing
+   global screensaver_active
    global action_menu
    global action_video
    global f_time
@@ -296,6 +363,10 @@ async def execute_(command):
 
          if command<30:
             local_time = datetime.now(tz)
+            if screensaver_active:
+                 logging.info("  \\----------------------------- SCREENAVER WAKE :  "+str(local_time))
+                 await kodi_request_("Input.ExecuteAction", {"action": "backspace" })          
+            
             if time.time()-f_time>flick_expire:
                  local_f_time = datetime.fromtimestamp(f_time)
                  logging.info("  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> Dropped Delayed : "+str(local_f_time)+" Now: "+str(local_time))
@@ -403,17 +474,17 @@ async def decode(seq):
       if L_counter>=10:   
          c_code=1
          c_time=time.time()
-         reinitialize=False
+         reinitialize=True
          logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 1 :  '+str(L_counter)+" Left Airwheel revolutions")  
-         speak_command("warning")     
+         await speak_command_("warning")     
          
       if c_code==1 and R_counter>=10:
          c_code=2
-         reinitialize=True
+         reinitialize=False
          c_time=time.time()
          logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 2 :  '+str(R_counter)+" Right Airwheel revolutions")
          logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> SHUTDOWN Stage 2 :  Shutdown in 30 seconds unless video playback resumes')
-         speak_command("shutdownin30seconds")
+         await speak_command_("shutdownin30seconds")
          
    else:
       if time.time()-c_time>40 and c_code>=1:
@@ -473,9 +544,24 @@ def is_screen_video():
     else:
         return 0
 
+
+
+def is_screensaver_active():
+    result = False
+    #Get player properties
+    props = kodi_request("XBMC.GetInfoBooleans", { "booleans" : ["System.ScreenSaverActive"] })  
+  
+    if props and "result" in props:
+        result =  props["result"]["System.ScreenSaverActive"] == True  # 0 means paused
+    #print(props)
+    #if result: 
+    #     logging.info("  \\----------------------------- SCREENAVER active :  "+str(local_time))
+
+    return result
+
 def is_video_playing(player_id):
 
-    
+
     if player_id==0:
         return False
 
@@ -487,9 +573,6 @@ def is_video_playing(player_id):
     #print(props)
     
     return False
-
-
-
 
 
 
@@ -908,6 +991,7 @@ async def main():
     global o_result
     global video_active
     global video_playing
+    global screensaver_active
 
     global a_result
     global f_result
@@ -947,7 +1031,11 @@ async def main():
 
     video_active =  is_screen_video()
     video_playing =  is_video_playing(video_active)
- 
+    if not video_playing:
+        screensaver_active =  is_screensaver_active()
+    else:
+        screensaver_active = False
+
     flicklib.recalibrate() 
     
     # Update data window continuously until Control-C
@@ -1007,8 +1095,8 @@ async def main():
         if result and time.time()-exec_t>flick_interval and cycle_result<=0:
               await ready_beep_()
               #Green light ready to recognize
-              act_led("1")
-              pwr_led("0")
+              await act_led_("1")
+              await pwr_led_("0")
               result=0  
 
         local_time = datetime.now(tz)
@@ -1021,8 +1109,8 @@ async def main():
              if cycle_result<30 and cycle_result>0:
                 await ack_beep_() 
                 #Red light, processing flick result, no gestures allowed
-                act_led("0")
-                pwr_led("1")
+                await act_led_("0")
+                await pwr_led_("1")
                 if time.time()-exec_t<flick_interval:
                    cycle_result=0                            # Setup for calibration instead  
                    logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> Dropped Ignored, too early ')
@@ -1054,14 +1142,19 @@ async def main():
              await soft_beep_()
              logging.info(f"{cycle_result:<5}"+" : "f"{g_command:<15}"+str(garbage_count)+"/"+str(max_garbage)+" Received ->       "+str(local_time))
              m_command="backspace"     #choose a benign kodi command to wake up the screen
-             if not video_playing:  
+             if not video_playing and screensaver_active:  
                 await kodi_request_("Input.ExecuteAction", {"action": m_command })      #asynchronous version
-                logging.info('  \\>>>>>>>>>>>>>>>>>>>>>>>>>>>>> Awoken. ')  
+                logging.info("  \\----------------------------- SCREEN WAKE :  "+str(local_time))
 
         #No detection in this cycle, detect if video is playing, so don't have to detect in execute(command)
         if cycle_result == 0:
              video_active =  is_screen_video()
-             video_playing =  is_video_playing(video_active) 
+             video_playing =  is_video_playing(video_active)
+             if not video_playing:
+                 screensaver_active = is_screensaver_active()
+             else:
+                 screensaver_active = False
+
              #Process the c_queue for shutdown sequence
              if not video_playing:
                  await decode(c_queue)
@@ -1071,7 +1164,7 @@ async def main():
                      await speak_command_("shuttingdown")
                      os.system("sudo shutdown -h now")
  
-                 if time.time()-c_time<30 and c_code==2 and video_active:           #Video paused and timer has not elapsed yet, do a board reset instead
+                 if time.time()-c_time<30 and c_code==1 and video_active:           #Video paused and timer has not elapsed yet, do a board reset instead
                      if reinitialize:
                          flicklib.reinit()
                          #warn_beep()
@@ -1094,17 +1187,17 @@ async def main():
              #Recalibrate every 60 seconds 
              if (run_t-init_t>recalibration_interval or garbage_count>=max_garbage) and permit_recalibrate:
                    if (x_in=='' or y_in=='' or z_in==''):
-                        #Red light, recalibrate, no gestures allowed
-                        #act_led("0")
-                        #pwr_led("1")      
                         if garbage_count>=max_garbage:
                             warn_beep()    #Warn user with long beep -  hands off the board!
-                        flicklib.recalibrate()
+
+                        #Blink while recalibrating to warn user to move hands off the board.Recalibration starts after 1 second after start of blinking
+                        led_task = asyncio.create_task(blink_leds_())
+                        await recalibrate_()
+                        await asyncio.gather(led_task)
+
                         garbage_count=0
                         logging.info('  >>>>>>>>>>>>>>>>>>>>>>>>>>>>> Recalibrated. <<<<<<<<<<<<<<<<<<<<<<<<<<<<< ')  
                         init_t=time.time()
-                        #act_led("1")
-                        #pwr_led("0")     
              x_in=''
              y_in=''
              z_in=''

@@ -41,8 +41,8 @@ MyFlick - Gesture control for Kodi
 3. By evaluating the value of Z, you can further qualify hold as hover high or hover low, allowing two assignable actions.
 4. Its best to presynthesize the speech files into wav files to cut down on cpu processing
 5. The garbage model is only useful for waking up the screen as it will occur whenever there is electromagnetic noise on top of the board so I assigned it to pressing Backspace as I don't know of any more direct way of turning off the screensaver on an as needed basis.
-6. A recalibration every 60 seconds seems optimal in my setup with a max_garbage=4. User can force a recalibration by instantiating garbage detections to a set limit (twiddle your fingers on top of the board a few times).  A long beep is played to warn to remove hand from top of board before recalibration triggered by garbage count.  The garbage count will be cleared at each recalibration (interval or garbage count triggered)  so hopefully the long beep only will serve for user intended recalibrations if interval recalibrations occur frequently enough.  If the garbage count increases to max_garbage due to environmental EM noise, a silent (no longbeep) recalibration will be triggered, automatically self correcting for EM noise.   
-7. Onboard LEDS ACT and PWR are used as visual cues.  ACT (Green LED) signals readiness for detection. PWR (Red LED) signals WAIT ( execute() running, recalibration in process, still within the imposed flick interval). This is unfortunately board specific and my settings are for RPI 3B+.
+6. Automatic self calibration for EM noise. A recalibration every 60 seconds seems optimal in my setup with a max_garbage=4. User can force a recalibration by instantiating garbage detections to a set limit (twiddle your fingers on top of the board a few times).  A long beep is played to warn to remove hand from top of board before recalibration triggered by garbage count.  The garbage count will be cleared at each recalibration (interval or garbage count triggered)  so hopefully the long beep only will serve for user intended recalibrations if interval recalibrations occur frequently enough.  If the garbage count increases to max_garbage due to environmental EM noise, a silent (no longbeep) recalibration will be triggered.   
+7. Onboard LEDS ACT and PWR are used as visual cues.  ACT (Green LED) signals readiness for detection. PWR (Red LED) signals WAIT ( execute() running, still within the imposed flick interval). This is unfortunately board specific and my settings are for RPI 3B+. Blinking PWR and ACT means a recalibraion is ongoing. 
 8. Process priority is adjusted by the script, requiring root privileges. Therefore, a systemd service script is included to start myflick. 
 9. Flick gestures are limited to 1 per flick_interval (1 second) and expired after flick_expire (3 seconds). Execute() will only execute the last flick detection and throw away the earlier ones to avoid queueing. Airwheel has no interval limit but in the general UI, it will be interrupted by speech playback so page up and page down will execute one step at a time. 
 10. There is code for sending 12 byte and 16 byte Gestic Library Messages for anyone who wishes to experiment.
@@ -52,16 +52,16 @@ Tips:
 
 1. Gesture recognition is inaccurate:
 
-   Force a recalibration by increasing garbage_count to max_garbage. Do this by putting the video in pause mode (to mute the video volume) and then twiddling your fingers over the board up to max_garbage times. A softbeep will signal recognition of each garbage gesture, followed by a longbeep if you hit max_garbage.  Hands off the board before the longbeep ends.  Pick a softbeep that is barely audible as garbage detection could happen with extraneous EM noise over the board. One of the possible causes of inacurrate recogniton is silent recalibration at intervals with the hand over the board. 
+   Force a recalibration by increasing garbage_count to max_garbage. Do this by putting the video in pause mode (to mute the video volume) and then twiddling your fingers over the board up to max_garbage times. A softbeep will signal recognition of each garbage gesture, followed by a longbeep if you hit max_garbage.  Hands off the board before the longbeep ends.  Pick a softbeep that is barely audible as garbage detection could happen with extraneous EM noise over the board. One of the possible causes of inacurrate recogniton is silent recalibration at intervals with the hand over the board. Silent recalibrations will have a visual warning by blinking the leds. 
 
 2. Gesture recognition is delayed:
 
-   It might be necessary to reinitialize the board. Go through the shutdown process (Pause the video. Perform Left Airwheel 10 times followed by Right Airwheel 10 times).  The board will be reinitialized.  Then cancel the shutdown by unpausing the video.  
+   It might be necessary to reinitialize the board. Go through the first part of the shutdown process (Pause the video. Perform Left Airwheel 10 times).  The board will be reinitialized.  Then unpause the video.  
 
 Hardware and Library Notes:
 
 1. No point in testing the sequence byte in the response message to remove duplicates. It resulted in less accurate flick recognitions.
-2. Sometimes, the Flick board is displaying increasing latency between flick detection (when hand swipe ocurred)  and sending the library message response back. Try reinitializing the board by performing the shutdown routine and cancelling it by resuming playback.
+2. Sometimes, the Flick board is displaying increasing latency between flick detection (when hand swipe ocurred)  and sending the library message response back. Try reinitializing the board by performing the first part of the shutdown routine (pause video, perform 10 Left rotations) and resuming playback.
 
 My RPI is upside down with the HDMI port facing the TV so the compass directions are reversed. 
 
