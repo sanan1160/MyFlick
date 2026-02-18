@@ -50,6 +50,11 @@ recalibration_interval=120
 #wether to use onboard LEDs for visual cue: RED -> don't do gestures ; GREEN -> open for gestures
 use_leds=True
 
+#Orientation: location of raspberry pi HDMI port
+orientation=90
+
+
+
 #Kodi actions when video player is active
 action_video = {
        0: "Empty",
@@ -100,11 +105,17 @@ reinitialize=True
 A_Left  = 31
 A_Right = 32
 
-#Flick Results
-F_East        = 11
-F_South       = 12
-F_West        = 13
-F_North       = 14
+#Flick swipes
+if orientation == 0:
+    F_East,F_South,F_West,F_North = [ 11,12,13,14 ]
+elif orientation == 90:
+    F_East,F_South,F_West,F_North = [ 12,13,14,11 ]
+elif orientation ==180:
+    F_East,F_South,F_West,F_North = [ 13,14,11,12 ]
+elif orientation == 270:
+    F_East,F_South,F_West,F_North = [ 14,11,12,13 ]
+
+#Flick Hold
 F_Hover_High  = 15
 F_Hover_Low   = 16
 
