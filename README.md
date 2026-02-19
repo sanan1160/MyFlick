@@ -47,6 +47,7 @@ MyFlick - Gesture control for Kodi
 9. Flick gestures are limited to 1 per flick_interval (1 second) and expired after flick_expire (3 seconds). Execute() will only execute the last flick detection and throw away the earlier ones to avoid queueing. Airwheel has no interval limit but in the general UI, it will be interrupted by speech playback so page up and page down will execute one step at a time. 
 10. There is code for sending 12 byte and 16 byte Gestic Library Messages for anyone who wishes to experiment.
 11. A logging facility is included. Useful to watch the log with tail -f myflick.log
+12. The raspberry pi board can be oriented with the HDMI port in 0,90,180,270 degrees, just adjust the orientation setting.  I keep it at 90 degrees so I have full view of the LEDs. 
 
 Tips:
 
