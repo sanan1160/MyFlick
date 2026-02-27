@@ -45,7 +45,7 @@ flick_expire=3
 max_garbage=4
 
 #Recalibrate every N seconds
-recalibration_interval=120
+recalibration_interval=300
 
 #wether to use onboard LEDs for visual cue: RED -> don't do gestures ; GREEN -> open for gestures
 use_leds=True
@@ -81,6 +81,8 @@ action_menu = {
       32: "pagedown"
 }
 
+
+logfile='/home/pi/bin/myflick.log'
 
 #User configured paramters END: -----------------------------------------------------------------------------
 
@@ -185,7 +187,7 @@ detection = {
 
 # Configure the logging
 logging.basicConfig(
-    filename='/home/pi/bin/myflick.log',
+    filename=logfile,
     level=logging.INFO, # Log messages with severity INFO or higher
     format='%(asctime)s - %(levelname)s - %(message)s',
     filemode='a' # Use 'a' to append to the file, 'w' to overwrite
@@ -721,6 +723,7 @@ def execute(command):
 
 @flicklib.move()
 def move(x, y, z):
+    global f_time
     global z_in
     global y_in
     global x_in
@@ -729,6 +732,8 @@ def move(x, y, z):
     x_in=x
     y_in=y
 
+    f_time=time.time()
+           
 
 @flicklib.flick()
 def flick(i_type,start,finish):
@@ -770,7 +775,8 @@ def flick(i_type,start,finish):
            garbage_count+=1
            
     if f_result:
-           f_time=time.time()
+           #f_time=time.time()
+        if time.time() - f_time <= flick_expire:
            f_queue.append((f_result,f_time))
               
     permit_recalibrate=True
